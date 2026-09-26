@@ -1,13 +1,13 @@
-# Quickstart
+# 快速開始
 
-## Upload from curl
+## 用 curl 上傳
 
 ```bash
-# New share folder + file in one call
+# 一次建好分享資料夾並上傳檔案
 curl -F file=@photo.jpg http://localhost:20042/api/public/upload
 ```
 
-Response (JSON):
+回傳（JSON）：
 
 ```json
 {
@@ -19,13 +19,13 @@ Response (JSON):
 }
 ```
 
-## Add to an existing folder
+## 加入現有資料夾
 
 ```bash
 curl -F file=@notes.txt -F folder=FOLDER_ID http://localhost:20042/api/public/upload
 ```
 
-## Upload from Python
+## 用 Python 上傳
 
 ```python
 import httpx
@@ -35,12 +35,13 @@ with open("photo.jpg", "rb") as f:
 print(r.json()["download_url"])
 ```
 
-## Upload from a browser
+## 用瀏覽器上傳
 
-Open `/upload`, pick a file, and copy the link — or `POST` the same endpoint
-with `fetch` + `FormData` (CORS is open).
+打開 `/upload`，選檔後複製連結即可——瀏覽器 JS 也可直接 `fetch` +
+`FormData` 打同一個端點（CORS 已開放）。
 
-## Private dashboard
+## 私人模式
 
-Open `/login` and enter the server `PASSWORD` for chunked/resumable uploads,
-the private file list (`/api/files`), and inline viewing (`/view/<id>`).
+打開 `/login` 輸入伺服器 `PASSWORD`：16 線程分段上傳、私人檔案清單
+（`/api/files`）、線上預覽（`/view/<id>`）、16 線程下載與刪除。
+登入後介面只顯示私人空間，不再顯示公開上傳。

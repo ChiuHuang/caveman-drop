@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import json
+import mimetypes
 import os
 import uuid
 from typing import Optional
@@ -15,7 +16,7 @@ from pydantic import BaseModel
 from ..config import settings
 from ..negotiation import wants_html
 from ..storage import private_files, stream_download
-from ..ui import page
+from ..ui import page, private_panel
 
 router = APIRouter()
 
@@ -109,25 +110,14 @@ async def api_files(request: Request):
     if not wants_html(request):
         return {"files": files}
     base = str(request.base_url).rstrip("/")
-    rows = "".join(
-        "<mdui-list-item>"
-        f'<mdui-icon slot="icon" name="description"></mdui-icon>'
-        f'<div><div class="fname">{html.escape(f["name"])}</div>'
-        f'<div class="fmeta">{f["bytes"]} bytes</div></div>'
-        f'<a slot="end-icon" href="{base}/dl/{f["id"]}">'
-        '<mdui-button-icon icon="download"></mdui-button-icon></a>'
-        f'<a slot="end-icon" href="{base}/del/{f["id"]}">'
-        '<mdui-button-icon icon="delete"></mdui-button-icon></a>'
-        "</mdui-list-item>"
-        for f in files
-    )
     return HTMLResponse(
         page(
-            "Private files",
-            f"""<mdui-card variant="outlined" class="card-pad">
-          <h1>Private files ({len(files)})</h1>
-          {"<mdui-list>" + rows + "</mdui-list>" if rows else "<p>No files.</p>"}
-        </mdui-card>""",
+            "私人檔案",
+            f"""<mdui-card variant="filled" class="card-pad hero">
+          <h1>私人檔案（{len(files)}）</h1>
+          <p><a href="/">回私人模式首頁</a></p>
+        </mdui-card>
+        <div class="stack">{private_panel(files, base)}</div>""",
             active="home",
             authed=True,
         )
@@ -135,14 +125,15 @@ async def api_files(request: Request):
 
 
 @router.get("/dl/{file_id}")
-async def download(request: Request, file_id: str):
+async def download(request: Request, file_id: str, preview: bool = False):
     jp = os.path.join(settings.upload_dir, file_id + ".json")
     if not os.path.exists(jp):
         raise HTTPException(404)
     with open(jp, encoding="utf-8") as f:
         meta = json.load(f)
     path = os.path.join(settings.upload_dir, file_id + meta.get("ext", ""))
-    return stream_download(request, path, meta["filename"])
+    ctype = mimetypes.guess_type(meta.get("filename", ""))[0] if preview else None
+    return stream_download(request, path, meta["filename"], inline=preview, content_type=ctype)
 
 
 @router.get("/view/{file_id}")

@@ -46,10 +46,10 @@ def create_app() -> FastAPI:
         if wants_html(request):
             return HTMLResponse(
                 page(
-                    "Not found",
+                    "找不到",
                     '<mdui-card variant="outlined" class="card-pad">'
-                    "<h1>404</h1><p>Nothing lives at this URL.</p>"
-                    '<a href="/"><mdui-button>Go home</mdui-button></a></mdui-card>',
+                    "<h1>404</h1><p>這個網址沒有東西。</p>"
+                    '<a href="/"><mdui-button>回首頁</mdui-button></a></mdui-card>',
                 ),
                 status_code=404,
             )

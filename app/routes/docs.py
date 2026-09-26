@@ -21,10 +21,10 @@ router = APIRouter()
 DOCS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "docs")
 
 PAGES = [
-    ("index", "Introduction"),
-    ("quickstart", "Quickstart"),
-    ("api", "API reference"),
-    ("limits", "Limits & fair use"),
+    ("index", "介紹"),
+    ("quickstart", "快速開始"),
+    ("api", "API 參考"),
+    ("limits", "限制與規範"),
 ]
 
 _md = md_lib.Markdown(extensions=["fenced_code", "tables"])

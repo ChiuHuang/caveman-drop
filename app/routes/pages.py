@@ -1,6 +1,8 @@
 """Human page routes: /, /login, /logout, /upload, /f/{folder_id}.
 
-Browsers get the MDUI UI; scripts/agents keep the original plain-text output.
+Browsers get the MDUI UI (Traditional Chinese); scripts/agents keep the
+original plain-text output. After login the site switches to private mode —
+no public upload affordances are shown.
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from ..config import settings
 from ..negotiation import wants_html
 from ..storage import private_files, public_folder_files
-from ..ui import endpoint_card, file_rows, page
+from ..ui import endpoint_card, file_rows, page, private_panel
 
 router = APIRouter()
 
@@ -22,69 +24,61 @@ def _dashboard_html(request: Request, authed: bool) -> str:
     base = str(request.base_url).rstrip("/")
     if authed:
         files = private_files()
-        rows = []
-        for f in files:
-            rows.append(
-                "<mdui-list-item>"
-                f'<mdui-icon slot="icon" name="description"></mdui-icon>'
-                f'<div><div class="fname">{html.escape(f["name"])}</div>'
-                f'<div class="fmeta">{f["bytes"]} bytes</div></div>'
-                f'<a slot="end-icon" href="{base}/dl/{f["id"]}">'
-                '<mdui-button-icon icon="download"></mdui-button-icon></a>'
-                "</mdui-list-item>"
-            )
-        private = (
-            '<mdui-card variant="outlined" class="card-pad">'
-            f"<h2>Private files ({len(files)})</h2>"
-            + (
-                f'<mdui-list>{"".join(rows)}</mdui-list>'
-                if rows
-                else "<p>No private files.</p>"
-            )
-            + "</mdui-card>"
-        )
-    else:
-        private = (
-            '<mdui-card variant="outlined" class="card-pad">'
-            "<h2>Private area</h2>"
-            '<p>Chunked/resumable uploads live behind a password login.</p>'
-            '<a href="/login"><mdui-button>Log in</mdui-button></a>'
-            "</mdui-card>"
+        return page(
+            "私人模式",
+            f"""
+        <mdui-card variant="filled" class="card-pad hero">
+          <h1>私人模式</h1>
+          <p>已登入 — 這裡只有你的私人檔案，不會顯示公開上傳。</p>
+          <div class="form-row">
+            <a href="/api/files"><mdui-button variant="outlined">檔案 API</mdui-button></a>
+            <a href="/logout"><mdui-button variant="text">登出</mdui-button></a>
+          </div>
+        </mdui-card>
+        <div class="stack">
+          {private_panel(files, base)}
+        </div>""",
+            active="home",
+            authed=True,
         )
     return page(
-        "Home",
+        "首頁",
         f"""
         <mdui-card variant="filled" class="card-pad hero">
           <h1>CaveMan Drop</h1>
-          <p>Anonymous file sharing with a text-first API. No account needed for public shares.</p>
+          <p>免帳號的匿名檔案分享。傳檔後立刻拿到永久連結。</p>
           <div class="form-row">
-            <a href="/upload"><mdui-button>Upload a file</mdui-button></a>
-            <mdui-button variant="outlined" data-create-folder>Create empty folder</mdui-button>
-            <a href="/docs"><mdui-button variant="text">Read the docs</mdui-button></a>
+            <a href="/upload"><mdui-button>上傳檔案</mdui-button></a>
+            <mdui-button variant="outlined" data-create-folder>建立空資料夾</mdui-button>
+            <a href="/docs"><mdui-button variant="text">使用文件</mdui-button></a>
           </div>
         </mdui-card>
         <div class="stack">
           <mdui-card variant="outlined" class="card-pad">
-            <h2>Public upload</h2>
+            <h2>公開上傳</h2>
             <form action="/api/public/upload" method="post" enctype="multipart/form-data" data-ajax-upload>
               <div class="form-row">
                 <input type="file" name="file" required>
-                <mdui-button type="submit">Upload</mdui-button>
+                <mdui-button type="submit">上傳</mdui-button>
               </div>
             </form>
             <div data-upload-result></div>
           </mdui-card>
-          {private}
+          <mdui-card variant="outlined" class="card-pad">
+            <h2>私人空間</h2>
+            <p>登入後可使用 16 線程分段上傳、私人檔案清單、預覽與刪除。</p>
+            <a href="/login"><mdui-button>登入</mdui-button></a>
+          </mdui-card>
           <div>
-            <h2>Endpoints</h2>
-            {endpoint_card("POST", "/api/public/upload", "Anonymous upload. Omit folder to start a new share folder.", "/upload")}
-            {endpoint_card("GET", "/f/{{folder_id}}", "Folder browser — share this link with others.", "/upload")}
-            {endpoint_card("GET", "/api", "Machine-readable API index (JSON for agents).", "/api")}
-            {endpoint_card("GET", "/docs", "GitBook-style guides and API reference.", "/docs")}
+            <h2>端點一覽</h2>
+            {endpoint_card("POST", "/api/public/upload", "匿名上傳。不帶 folder 會自動建立新的分享資料夾。", "/upload")}
+            {endpoint_card("GET", "/f/{{folder_id}}", "資料夾瀏覽頁 — 把這個連結分享給別人。", "/upload")}
+            {endpoint_card("GET", "/api", "機器可讀的 API 索引（程式拿 JSON）。", "/api")}
+            {endpoint_card("GET", "/docs", "圖書館式指南與 API 參考。", "/docs")}
           </div>
         </div>""",
         active="home",
-        authed=authed,
+        authed=False,
     )
 
 
@@ -149,15 +143,15 @@ async def index(request: Request):
 def _login_html(error: str = "") -> str:
     err = f'<mdui-card variant="filled" class="card-pad"><p>{html.escape(error)}</p></mdui-card>' if error else ""
     return page(
-        "Login",
+        "登入",
         f"""{err}
         <mdui-card variant="outlined" class="card-pad">
-          <h2>Log in</h2>
-          <p>Password login for the private dashboard. Public uploads need no login.</p>
+          <h2>登入私人模式</h2>
+          <p>登入後只會看到私人空間，不再顯示公開上傳。公開上傳不需要登入。</p>
           <form action="/login" method="post">
             <div class="form-row">
-              <mdui-text-field type="password" name="password" label="Password" required></mdui-text-field>
-              <mdui-button type="submit">Log in</mdui-button>
+              <mdui-text-field type="password" name="password" label="密碼" required></mdui-text-field>
+              <mdui-button type="submit">登入</mdui-button>
             </div>
           </form>
         </mdui-card>""",
@@ -188,7 +182,7 @@ async def login_post(request: Request, password: str = Form(...)):
             return RedirectResponse("/", status_code=303)
         return PlainTextResponse("Login successful. GET / for the server description.")
     if wants_html(request):
-        return HTMLResponse(_login_html("Wrong password."), status_code=401)
+        return HTMLResponse(_login_html("密碼錯誤，請再試一次。"), status_code=401)
     return PlainTextResponse("Wrong password.", status_code=401)
 
 
@@ -202,31 +196,31 @@ async def logout(request: Request):
 
 def _upload_html() -> str:
     return page(
-        "Upload",
+        "上傳",
         """
         <mdui-card variant="filled" class="card-pad hero">
-          <h1>Public upload</h1>
-          <p>No account required. You get a permanent link back.</p>
+          <h1>公開上傳</h1>
+          <p>免帳號。上傳後立刻拿到永久連結。</p>
         </mdui-card>
         <div class="stack">
           <mdui-card variant="outlined" class="card-pad">
-            <h2>Upload a file</h2>
+            <h2>上傳檔案</h2>
             <form action="/api/public/upload" method="post" enctype="multipart/form-data" data-ajax-upload>
               <div class="form-row">
                 <input type="file" name="file" required>
-                <mdui-text-field name="folder" label="Folder ID (optional — leave empty for a new folder)"></mdui-text-field>
-                <mdui-button type="submit">Upload</mdui-button>
+                <mdui-text-field name="folder" label="資料夾 ID（選填，空白會建立新資料夾）"></mdui-text-field>
+                <mdui-button type="submit">上傳</mdui-button>
               </div>
             </form>
             <div data-upload-result></div>
           </mdui-card>
           <mdui-card variant="outlined" class="card-pad">
-            <h2>Or start an empty folder</h2>
-            <p>Create a folder first, then share its link so others can add files.</p>
-            <mdui-button data-create-folder>Create empty folder</mdui-button>
+            <h2>或先建立空資料夾</h2>
+            <p>先建資料夾，再把連結分享給別人一起上傳。</p>
+            <mdui-button data-create-folder>建立空資料夾</mdui-button>
           </mdui-card>
           <mdui-card variant="outlined" class="card-pad">
-            <h2>curl</h2>
+            <h2>curl 用法</h2>
             <pre class="curl">curl -F file=@example.bin /api/public/upload
 curl -F file=@example.bin -F folder=FOLDER_ID /api/public/upload</pre>
           </mdui-card>
@@ -259,6 +253,11 @@ def _upload_text(request: Request) -> str:
 
 @router.get("/upload")
 async def upload_page(request: Request):
+    if request.session.get("auth"):
+        # Private mode: no public upload — the dashboard has the private uploader.
+        if wants_html(request):
+            return RedirectResponse("/", status_code=303)
+        return PlainTextResponse(_upload_text(request))
     if wants_html(request):
         return HTMLResponse(_upload_html())
     return PlainTextResponse(_upload_text(request))
@@ -272,36 +271,48 @@ def _folder_html(request: Request, folder_id: str) -> HTMLResponse | None:
     if not _os.path.isdir(public_folder_dir(folder_id)):
         return None
     base = str(request.base_url).rstrip("/")
+    authed = bool(request.session.get("auth"))
     files = public_folder_files(folder_id)
     for f in files:
         f["download_url"] = f"{base}/dl/pub/{folder_id}/{f['id']}"
     rows = file_rows(files, folder_id, base)
-    body = page(
-        f"Folder {folder_id[:8]}",
-        f"""
-        <mdui-card variant="filled" class="card-pad hero">
-          <h1>Public folder</h1>
-          <p><code>{html.escape(folder_id)}</code>
-          <mdui-button variant="text" data-copy="{base}/f/{folder_id}">Copy share link</mdui-button></p>
-        </mdui-card>
-        <div class="stack">
+    if authed:
+        add_card = """
           <mdui-card variant="outlined" class="card-pad">
-            <h2>Files ({len(files)})</h2>
-            {rows}
-          </mdui-card>
+            <h2>加入檔案</h2>
+            <p class="muted">目前為私人模式。如需上傳公開檔案，請先登出。</p>
+            <a href="/logout"><mdui-button variant="outlined">登出以上傳公開檔案</mdui-button></a>
+          </mdui-card>"""
+    else:
+        add_card = f"""
           <mdui-card variant="outlined" class="card-pad">
-            <h2>Add a file to this folder</h2>
+            <h2>加入檔案到此資料夾</h2>
             <form action="/api/public/upload" method="post" enctype="multipart/form-data" data-ajax-upload>
               <input type="hidden" name="folder" value="{html.escape(folder_id)}">
               <div class="form-row">
                 <input type="file" name="file" required>
-                <mdui-button type="submit">Upload</mdui-button>
+                <mdui-button type="submit">上傳</mdui-button>
               </div>
             </form>
             <div data-upload-result></div>
+          </mdui-card>"""
+    body = page(
+        f"資料夾 {folder_id[:8]}",
+        f"""
+        <mdui-card variant="filled" class="card-pad hero">
+          <h1>公開資料夾</h1>
+          <p><code>{html.escape(folder_id)}</code>
+          <mdui-button variant="text" data-copy="{base}/f/{folder_id}">複製分享連結</mdui-button></p>
+        </mdui-card>
+        <div class="stack">
+          <mdui-card variant="outlined" class="card-pad">
+            <h2>檔案（{len(files)}）</h2>
+            {rows}
           </mdui-card>
+          {add_card}
         </div>""",
         active="upload",
+        authed=authed,
     )
     return HTMLResponse(body)
 
@@ -349,7 +360,7 @@ async def folder_page(request: Request, folder_id: str):
         html_resp = _folder_html(request, folder_id)
         if html_resp is None:
             return HTMLResponse(
-                page("Not found", '<mdui-card class="card-pad">Folder not found.</mdui-card>'),
+                page("找不到", '<mdui-card class="card-pad"><p>找不到這個資料夾。</p></mdui-card>'),
                 status_code=404,
             )
         return html_resp

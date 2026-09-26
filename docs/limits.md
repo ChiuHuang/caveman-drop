@@ -1,16 +1,14 @@
-# Limits & fair use
+# 限制與規範
 
-Configured via `.env` (see `.env.example`).
+透過 `.env` 設定（見 `.env.example`）。
 
-- **Max single file:** `MAX_FILE_SIZE_GB` (default 5 GB), always enforced —
-  streaming writes abort and clean up past the cap.
-- **Multi-file folders:** once a folder holds more than one file, its combined
-  size is capped at `MAX_MULTI_FOLDER_TOTAL_GB` (default 1 GB). Single-file
-  folders are only bound by the per-file cap. Concurrent uploads to one folder
-  are serialized so the quota can't be raced.
-- **Rate limit:** `RATE_LIMIT_MAX_UPLOADS` uploads per IP per
-  `RATE_LIMIT_WINDOW_SECONDS` (default 30/hour). Exceeding it returns `429`.
-- **CORS:** the public API accepts cross-origin calls, so browser JS on any
-  site and AI agents can upload directly.
-- **No auth on public shares:** anyone with a folder id can add files to it.
-  Treat folder ids as bearer tokens and only share them deliberately.
+- **單檔上限：** `MAX_FILE_SIZE_GB`（預設 5 GB），一律強制執行——串流寫入
+  超過上限會中斷並清理。
+- **多人資料夾：** 資料夾超過 1 個檔案後，合計上限為
+  `MAX_MULTI_FOLDER_TOTAL_GB`（預設 1 GB）。只有一個檔案時只受單檔上限
+  約束。同資料夾的並行上傳會序列化，避免配額被競爭繞過。
+- **頻率限制：** 每 IP 每 `RATE_LIMIT_WINDOW_SECONDS` 秒最多
+  `RATE_LIMIT_MAX_UPLOADS` 次上傳（預設每小時 30 次）。超過回 `429`。
+- **CORS：** 公開 API 接受跨來源呼叫，任何網站的 JS 與 AI 都可直接上傳。
+- **公開分享無驗證：** 知道資料夾 id 的人都能加檔案。請把資料夾 id 當成
+  通行證，只分享給你信任的人。

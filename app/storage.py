@@ -112,10 +112,19 @@ def private_files() -> list[dict[str, Any]]:
     return files
 
 
-def stream_download(request: Request, path: str, fname: str) -> StreamingResponse:
+def stream_download(
+    request: Request,
+    path: str,
+    fname: str,
+    inline: bool = False,
+    content_type: str | None = None,
+) -> StreamingResponse:
+    """Range-aware download. `inline=True` renders in-browser (preview)."""
     if not os.path.exists(path):
         raise HTTPException(404)
     file_size = os.path.getsize(path)
+    media = content_type or "application/octet-stream"
+    disposition = ("inline" if inline else "attachment") + f'; filename="{fname}"'
     rng = request.headers.get("range")
 
     if not rng:
@@ -129,9 +138,9 @@ def stream_download(request: Request, path: str, fname: str) -> StreamingRespons
 
         return StreamingResponse(
             streamer(),
-            media_type="application/octet-stream",
+            media_type=media,
             headers={
-                "Content-Disposition": f'attachment; filename="{fname}"',
+                "Content-Disposition": disposition,
                 "Accept-Ranges": "bytes",
                 "Content-Length": str(file_size),
             },
@@ -160,12 +169,12 @@ def stream_download(request: Request, path: str, fname: str) -> StreamingRespons
     return StreamingResponse(
         ranged(),
         status_code=206,
-        media_type="application/octet-stream",
+        media_type=media,
         headers={
             "Content-Range": f"bytes {start}-{end}/{file_size}",
             "Accept-Ranges": "bytes",
             "Content-Length": str(length),
-            "Content-Disposition": f'attachment; filename="{fname}"',
+            "Content-Disposition": disposition,
         },
     )
 

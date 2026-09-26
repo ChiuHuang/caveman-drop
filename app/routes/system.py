@@ -83,23 +83,22 @@ async def api_root(request: Request):
             page(
                 "API",
                 """<mdui-card variant="filled" class="card-pad hero">
-          <h1>API index</h1>
-          <p>Every endpoint below returns JSON to scripts and agents
-          (<code>?format=json</code> forces it) and renders an MDUI console for browsers.</p>
+          <h1>API 索引</h1>
+          <p>以下每個端點：程式與 AI 拿到 JSON（加 <code>?format=json</code> 可強制），瀏覽器則看到 MDUI 控制台。</p>
           <div class="form-row">
-            <a href="/llms.txt"><mdui-button variant="outlined">llms.txt for agents</mdui-button></a>
-            <a href="/docs/api"><mdui-button variant="text">Full reference</mdui-button></a>
+            <a href="/llms.txt"><mdui-button variant="outlined">給 AI 的 llms.txt</mdui-button></a>
+            <a href="/docs/api"><mdui-button variant="text">完整參考</mdui-button></a>
           </div>
         </mdui-card>
         <div class="stack">
         """
-                + endpoint_card("POST", "/api/public/upload", "Anonymous upload — multipart field 'file', optional 'folder'.", "/upload")
-                + endpoint_card("POST", "/api/public/folder", "Create an empty folder; returns share/upload URLs.", "/upload")
-                + endpoint_card("GET", "/api/public/folder/{folder_id}", "Folder metadata, files, download URLs.", None)
-                + endpoint_card("GET", "/api/public/file/{folder_id}/{file_id}", "One file's metadata and URL.", None)
-                + endpoint_card("GET", "/dl/pub/{folder_id}/{file_id}", "Download bytes. Range requests supported.", None)
-                + endpoint_card("GET", "/api/files", "Private file list (password session required).", "/login")
-                + endpoint_card("POST", "/api/upload_chunk + /api/merge_chunks", "Private chunked/resumable upload.", "/login")
+                + endpoint_card("POST", "/api/public/upload", "匿名上傳 — multipart 欄位 'file'，選填 'folder'。", "/upload")
+                + endpoint_card("POST", "/api/public/folder", "建立空資料夾，回傳分享與上傳網址。", "/upload")
+                + endpoint_card("GET", "/api/public/folder/{folder_id}", "資料夾資訊、檔案清單與下載網址。", None)
+                + endpoint_card("GET", "/api/public/file/{folder_id}/{file_id}", "單一檔案資訊與下載網址。", None)
+                + endpoint_card("GET", "/dl/pub/{folder_id}/{file_id}", "下載檔案本體。支援 Range 續傳 / 並行。", None)
+                + endpoint_card("GET", "/api/files", "私人檔案清單（需密碼登入）。", "/login")
+                + endpoint_card("POST", "/api/upload_chunk + /api/merge_chunks", "私人 16 線程分段上傳。", "/login")
                 + "</div>",
                 active="api",
             )

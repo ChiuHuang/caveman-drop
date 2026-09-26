@@ -21,6 +21,7 @@
 .result-box code { overflow-wrap: anywhere; }
 pre.curl { background: rgba(127,127,127,.12); padding: 12px; border-radius: 8px; overflow-x: auto; }
 .foot { text-align: center; opacity: .55; padding: 24px; font-size: .8rem; }
+.muted { opacity: .65; font-size: .9rem; }
 .nav-foot { padding: 12px; font-size: .8rem; opacity: .65; }
 .prose-wrap { padding: 24px; }
 mdui-card { --mdui-shape-corner-medium: 16px; }

@@ -197,11 +197,12 @@ async def public_file_api(request: Request, folder_id: str, file_id: str):
             f"""
         <mdui-card variant="filled" class="card-pad hero">
           <h1>{html.escape(payload["filename"])}</h1>
-          <p>{payload["size_bytes"]} bytes · {html.escape(payload["content_type"])}</p>
+          <p>{payload["size_bytes"]} 位元組 · {html.escape(payload["content_type"])}</p>
           <div class="form-row">
-            <a href="{payload["download_url"]}"><mdui-button icon="download">Download</mdui-button></a>
-            <mdui-button variant="outlined" data-copy="{payload["download_url"]}">Copy link</mdui-button>
-            <a href="{base}/f/{folder_id}"><mdui-button variant="text">Open folder</mdui-button></a>
+            <a href="{payload["download_url"]}"><mdui-button icon="download">下載</mdui-button></a>
+            <mdui-button variant="outlined" data-preview="{payload["download_url"]}?preview=1" data-name="{html.escape(payload["filename"])}">預覽</mdui-button>
+            <mdui-button variant="outlined" data-copy="{payload["download_url"]}">複製連結</mdui-button>
+            <a href="{base}/f/{folder_id}"><mdui-button variant="text">開啟資料夾</mdui-button></a>
           </div>
         </mdui-card>
         <mdui-card variant="outlined" class="card-pad">
@@ -235,18 +236,18 @@ async def public_folder_api(request: Request, folder_id: str):
         }
     return HTMLResponse(
         page(
-            f"Folder {folder_id[:8]} (API)",
+            f"資料夾 {folder_id[:8]}（API）",
             f"""
         <mdui-card variant="filled" class="card-pad hero">
-          <h1>Folder API console</h1>
+          <h1>資料夾 API 控制台</h1>
           <p><code>{html.escape(folder_id)}</code></p>
           <div class="form-row">
-            <a href="{base}/f/{folder_id}"><mdui-button>Open folder UI</mdui-button></a>
-            <mdui-button variant="outlined" data-copy="{base}/api/public/folder/{html.escape(folder_id)}">Copy API URL</mdui-button>
+            <a href="{base}/f/{folder_id}"><mdui-button>開啟資料夾介面</mdui-button></a>
+            <mdui-button variant="outlined" data-copy="{base}/api/public/folder/{html.escape(folder_id)}">複製 API 網址</mdui-button>
           </div>
         </mdui-card>
         <mdui-card variant="outlined" class="card-pad">
-          <h2>Files ({len(files)})</h2>
+          <h2>檔案（{len(files)}）</h2>
           {file_rows(files, folder_id, base)}
         </mdui-card>""",
             active="api",
@@ -255,7 +256,7 @@ async def public_folder_api(request: Request, folder_id: str):
 
 
 @router.get("/dl/pub/{folder_id}/{file_id}")
-async def public_download(request: Request, folder_id: str, file_id: str):
+async def public_download(request: Request, folder_id: str, file_id: str, preview: bool = False):
     validate_public_id(file_id, "file id")
     fdir = public_folder_dir(folder_id)
     jp = os.path.join(fdir, file_id + ".json")
@@ -264,4 +265,5 @@ async def public_download(request: Request, folder_id: str, file_id: str):
     with open(jp, encoding="utf-8") as f:
         meta = json.load(f)
     path = os.path.join(fdir, file_id + meta.get("ext", ""))
-    return stream_download(request, path, meta["filename"])
+    ctype = meta.get("content_type") if preview else None
+    return stream_download(request, path, meta["filename"], inline=preview, content_type=ctype)

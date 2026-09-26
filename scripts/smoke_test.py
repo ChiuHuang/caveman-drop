@@ -1,3 +1,6 @@
+"""Smoke test: browser HTML vs agent text/JSON, upload flows, private mode."""
+import uuid
+
 from fastapi.testclient import TestClient
 from app import app
 
@@ -6,43 +9,103 @@ B = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120",
      "Accept": "text/html,application/xhtml+xml"}
 J = {"User-Agent": "curl/8.0", "Accept": "*/*"}
 
+# --- logged-out: public UI visible ---
 r = c.get("/", headers=B)
 print("browser /:", r.status_code, r.headers["content-type"], "mdui" in r.text.lower())
+assert "公開上傳" in r.text and "data-ajax-upload" in r.text
 r = c.get("/", headers=J)
-print("curl /:", r.status_code, r.headers["content-type"], r.text.splitlines()[0])
+print("curl /:", r.status_code, r.text.splitlines()[0])
+assert r.text.startswith("CaveMan Drop")
+
 r = c.get("/api", headers=J)
 print("curl /api:", r.status_code, sorted(r.json().keys()))
 r = c.get("/api", headers=B)
-print("browser /api:", r.status_code, "mdui" in r.text.lower())
-r = c.get("/llms.txt", headers=J)
-print("llms:", r.status_code, r.text.splitlines()[0])
-r = c.get("/upload", headers=B)
-print("browser /upload:", r.status_code, "ajax-upload" in r.text)
-r = c.get("/upload", headers=J)
-print("curl /upload:", r.status_code, r.text.splitlines()[0])
-r = c.get("/docs", headers=B)
-print("browser /docs:", r.status_code, "docs-layout" in r.text)
-r = c.get("/docs/api", headers=J)
-print("curl /docs/api:", r.status_code, r.text.splitlines()[0])
-f = c.post("/api/public/upload", headers=J, files={"file": ("hello.txt", b"hi caveman")})
-print("upload:", f.status_code, f.json()["filename"], f.json()["size_bytes"])
-fid, folder = f.json()["file_id"], f.json()["folder_id"]
-g = c.get(f"/api/public/folder/{folder}", headers=J)
-print("folder json:", g.status_code, len(g.json()["files"]))
-g = c.get(f"/api/public/folder/{folder}", headers=B)
-print("folder html:", g.status_code, "mdui" in g.text.lower())
-d = c.get(f"/dl/pub/{folder}/{fid}", headers=J)
-print("download:", d.status_code, d.content)
-h = c.get(f"/f/{folder}", headers=B)
-print("share page:", h.status_code, "Public folder" in h.text)
-h = c.get(f"/f/{folder}", headers=J)
-print("share text:", h.status_code, h.text.splitlines()[0])
+assert "API 索引" in r.text
+print("browser /api OK")
 
-# login flow (curl keeps text behavior)
+r = c.get("/llms.txt", headers=J)
+assert r.text.startswith("# CaveMan Drop")
+print("llms OK")
+
+r = c.get("/upload", headers=B)
+assert "data-ajax-upload" in r.text
+print("browser /upload OK")
+
+r = c.get("/docs", headers=B)
+assert "docs-layout" in r.text
+print("browser /docs OK")
+r = c.get("/docs/api", headers=J)
+assert r.text.startswith("# API 參考")
+print("curl /docs/api OK")
+
+# --- public upload + folder + download + preview ---
+f = c.post("/api/public/upload", headers=J, files={"file": ("hello.txt", b"hi caveman")})
+assert f.status_code == 200
+fid, folder = f.json()["file_id"], f.json()["folder_id"]
+print("upload OK:", f.json()["filename"], f.json()["size_bytes"])
+
+g = c.get(f"/api/public/folder/{folder}", headers=J)
+assert g.status_code == 200 and len(g.json()["files"]) == 1
+g = c.get(f"/api/public/folder/{folder}", headers=B)
+assert "16 線程下載" in g.text and "data-preview" in g.text
+print("folder json+html OK")
+
+d = c.get(f"/dl/pub/{folder}/{fid}", headers=J)
+assert d.status_code == 200 and d.content == b"hi caveman"
+assert "attachment" in d.headers["content-disposition"]
+p = c.get(f"/dl/pub/{folder}/{fid}?preview=1", headers=J)
+assert "inline" in p.headers["content-disposition"]
+print("download + preview-disposition OK")
+
+h = c.get(f"/f/{folder}", headers=B)
+assert "公開資料夾" in h.text and "加入檔案到此資料夾" in h.text
+print("share page OK")
+
+# --- login -> private mode, public upload hidden ---
 r = c.post("/login", headers=J, data={"password": "passw"})
-print("login:", r.status_code, r.text[:20])
+assert r.status_code == 200
+print("login OK")
+
+r = c.get("/", headers=B)
+assert "私人模式" in r.text and "data-chunked" in r.text
+assert "data-ajax-upload" not in r.text, "public upload must be hidden when logged in"
+print("private-mode dashboard OK")
+
+r = c.get("/upload", headers=B, follow_redirects=False)
+assert r.status_code == 303, "logged-in /upload should redirect to /"
+print("logged-in /upload redirect OK")
+
+h = c.get(f"/f/{folder}", headers=B)
+assert "私人模式" in h.text and "加入檔案到此資料夾" not in h.text
+print("folder page hides upload form when logged in OK")
+
+# --- 16-thread style chunked upload (sequential here, same endpoints) ---
+uid = str(uuid.uuid4())
+blob = b"x" * (3 * 1024 * 1024 + 17)
+CS = 4 * 1024 * 1024
+total = (len(blob) + CS - 1) // CS
+for i in range(total):
+    rr = c.post("/api/upload_chunk", headers=J, files={"file_chunk": ("c", blob[i*CS:(i+1)*CS])},
+                data={"upload_id": uid, "index": str(i), "filename": "big.bin"})
+    assert rr.status_code == 200, rr.text
+m = c.post("/api/merge_chunks", headers=J, json={"upload_id": uid, "filename": "big.bin", "total_chunks": total})
+assert m.json()["success"]
+priv_id = m.json()["file_id"]
+print("chunked upload+merge OK:", total, "chunk(s)")
+
 r = c.get("/api/files", headers=J)
-print("private files:", r.status_code, "files" in r.json())
-r = c.get("/login", headers=B)
-print("browser login authed -> redirect:", r.status_code)
+names = [x["name"] for x in r.json()["files"]]
+assert "big.bin" in names
+r = c.get("/", headers=B)
+assert "big.bin" in r.text and "直接連結" in r.text and "刪除" in r.text and "預覽" in r.text
+print("private file row buttons OK")
+
+dl = c.get(f"/dl/{priv_id}", headers={**J, "Range": "bytes=0-99"})
+assert dl.status_code == 206 and dl.headers["Content-Range"].startswith("bytes 0-99/")
+print("range download OK")
+
+v = c.get(f"/view/{priv_id}", headers=J)
+assert v.status_code == 200
+print("preview view OK")
+
 print("ALL_SMOKE_OK")
