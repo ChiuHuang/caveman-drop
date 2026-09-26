@@ -52,13 +52,14 @@ def _docs_shell(active: str, body_html: str) -> str:
         f"""<div class="docs-layout">
       <mdui-card variant="outlined" class="card-pad docs-nav">
         <mdui-list>{"".join(items)}</mdui-list>
+        <mdui-divider></mdui-divider>
+        <div class="nav-foot"><a href="https://github.com/ChiuHuang/caveman-drop">GitHub</a> · <a href="/llms.txt">llms.txt</a></div>
       </mdui-card>
       <mdui-card variant="outlined" class="prose-wrap">
         <div class="mdui-prose">{body_html}</div>
       </mdui-card>
     </div>""",
         active="docs",
-        extra_head='<link rel="stylesheet" href="https://unpkg.com/mdui@2/mdui-prose.css">',
     )
 
 

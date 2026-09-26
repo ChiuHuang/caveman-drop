@@ -55,13 +55,13 @@ def _dashboard_html(request: Request, authed: bool) -> str:
         </mdui-card>
         <div class="stack">
           <mdui-card variant="outlined" class="card-pad">
-            <h2>公開上傳（16 線程，人人可用）</h2>
-            <p class="muted">免帳號。檔案切成 4 MB 分塊、16 條並行上傳，下方即時顯示每條線程與分段進度。</p>
+            <h2>公開上傳</h2>
+            <p class="muted">免帳號，上傳後立刻拿到永久連結。</p>
             {public_upload_form()}
           </mdui-card>
           <mdui-card variant="outlined" class="card-pad">
             <h2>私人空間</h2>
-            <p>登入後可使用 16 線程分段上傳、私人檔案清單、預覽與刪除。</p>
+            <p>登入後可使用私人檔案清單、預覽與刪除，不受分享頻寬限速影響。</p>
             <a href="/login"><mdui-button>登入</mdui-button></a>
           </mdui-card>
           <div>
@@ -195,7 +195,7 @@ def _upload_html() -> str:
         f"""
         <mdui-card variant="filled" class="card-pad hero">
           <h1>公開上傳</h1>
-          <p>免帳號，16 線程分段上傳。上傳後立刻拿到永久連結。</p>
+          <p>免帳號，上傳後立刻拿到永久連結。</p>
         </mdui-card>
         <div class="stack">
           <mdui-card variant="outlined" class="card-pad">
@@ -274,7 +274,7 @@ def _folder_html(request: Request, folder_id: str) -> HTMLResponse | None:
     else:
         add_card = f"""
           <mdui-card variant="outlined" class="card-pad">
-            <h2>加入檔案到此資料夾（16 線程）</h2>
+            <h2>加入檔案到此資料夾</h2>
             {public_upload_form(folder_id)}
           </mdui-card>"""
     body = page(

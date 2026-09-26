@@ -22,6 +22,7 @@ from ..storage import (
     bw_record,
     bw_status,
     chunk_dir,
+    client_ip,
     private_files,
     stream_download,
     validate_upload_id,
@@ -57,7 +58,7 @@ async def mobile_get(request: Request, token: str):
 
 @router.post("/m/{token}")
 async def mobile_post(request: Request, token: str, file: Optional[UploadFile] = File(None)):
-    """Legacy single-file POST — iPhone Shortcuts compatibility."""
+    """Legacy single-file POST ??iPhone Shortcuts compatibility."""
     if token != settings.mobile_token:
         raise HTTPException(403)
     if not file or not file.filename:
@@ -80,7 +81,8 @@ async def upload_chunk(
     filename: str = Form(...),
 ):
     _check_private(request)
-    ip = request.client.host if request.client else "unknown"
+    ip = client_ip(request)
+    authed = bool(request.session.get("auth"))
     validate_upload_id(upload_id)
     if index < 0 or index >= 2048:
         raise HTTPException(400, "Chunk index out of range")
@@ -91,9 +93,14 @@ async def upload_chunk(
     cdir = chunk_dir("priv", upload_id)
     with open(os.path.join(cdir, f"part_{index}"), "wb") as f:
         f.write(data)
+    if authed:
+        return {
+            "ok": True, "throttled": False, "threads": 16,
+            "throttle_mbps": None, "exempt": True,
+        }
     bw_record(ip, None, len(data))
     status = bw_status(ip)
-    await bw_pace(len(data), status["throttled"])
+    await bw_pace(ip, len(data), status["throttle_mbps"])
     return {"ok": True, **status}
 
 

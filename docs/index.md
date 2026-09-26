@@ -14,8 +14,10 @@ AI 看的是純 JSON / 純文字 API。
 瀏覽器自動看到 MDUI 網頁介面；`curl`、Python、AI 拿到 JSON 或純文字。
 用 `?format=html` / `?format=json` 可強制切換。
 
-登入後進入私人模式：16 線程分段上傳、私人檔案清單、預覽、16 線程下載、
+登入後進入私人模式：分段上傳、私人檔案清單、預覽、下載、
 直接連結與刪除。
+
+原始碼：<https://github.com/ChiuHuang/caveman-drop>
 
 ## 接下來去哪
 

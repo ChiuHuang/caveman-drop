@@ -1,11 +1,13 @@
 # CaveMan Drop
 
+原始碼：<https://github.com/ChiuHuang/caveman-drop>
+
 免帳號、純文字優先的檔案分享。從任何腳本、瀏覽器或 AI 上傳檔案——立刻拿回永久連結。公開分享不需要帳號。
 
 - **瀏覽器**在每個頁面與端點都看到 Material Design 3 介面（MDUI v2）。
 - **腳本與 AI**（`curl`、Python、AI 工具）透過內容協商拿到純 JSON / 純文字。加上 `?format=json` 或 `?format=html` 可強制指定。
 - 機器可讀文件在 `/llms.txt`；完整 API 索引在 `/api`。
-- 登入後進入**私人模式**：只有私人空間（含 16 線程分段上傳），不再顯示公開上傳。
+- 登入後進入**私人模式**：只有私人空間，不再顯示公開上傳。
 
 ## 快速開始
 
@@ -62,10 +64,14 @@ docs/                # /docs 的 Markdown 來源（GitHub 上也可直接閱讀�
 | `MAX_FILE_SIZE_GB` | `5` | 單檔上限 |
 | `MAX_MULTI_FOLDER_TOTAL_GB` | `1` | 資料夾超過 1 個檔案後的合計上限 |
 | `RATE_LIMIT_MAX_UPLOADS` / `RATE_LIMIT_WINDOW_SECONDS` | `30` / `3600` | 單 IP 上傳頻率限制 |
-| `BW_IP_SOFT_MB` | `100` | 單 IP 每分鐘流量軟上限，超過限速 |
-| `BW_IP_HARD_GB` / `BW_FOLDER_HARD_GB` | `1` / `5` | 每分鐘硬上限（IP / 資料夾） |
-| `BW_FOLDERS_PER_MIN` | `10` | 單 IP 每分鐘觸及資料夾數上限 |
-| `THROTTLE_MBPS` | `90` | 被限速時的速度 + 鎖單線程 |
+| `BW_WINDOW_SECONDS` | `600` | 頻寬統計視窗（秒），到期重算 |
+| `BW_IP_SOFT_MB` | `100` | 單 IP 每視窗流量，超過開始限速 |
+| `BW_FOLDER_HARD_GB` | `5` | 每資料夾每視窗上限 |
+| `BW_FOLDERS_PER_WINDOW` | `10` | 單 IP 每視窗觸及資料夾數上限 |
+| `THROTTLE_MAX_MBPS` / `THROTTLE_MIN_MBPS` | `90` / `40` | 限速起點與下限（每多 1 GB 降 10） |
+
+用戶端 IP 從 `CF-Connecting-IP` → `X-Forwarded-For` → 連線位址依序取得，
+Cloudflare 後面也能正確限速。登入 session 不限速。
 
 ## 文件
 

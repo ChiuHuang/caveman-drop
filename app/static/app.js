@@ -55,7 +55,7 @@
     const uploadId = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()));
     const state = {
       next: 0, done: 0, doneBytes: 0, failed: null,
-      paused: false, cancelled: false, linear: false, threads: Math.min(THREADS, total),
+      paused: false, cancelled: false, threads: Math.min(THREADS, total),
     };
 
     if (btn) btn.loading = true;
@@ -114,7 +114,6 @@
       while (true) {
         if (state.failed || state.cancelled) return;
         while (state.paused && !state.failed) await sleep(200);
-        if (state.linear && t > 0) { setRow(t, "限速中・待命", "idle"); return; } // 鎖單線程
         if (state.next >= total) { setRow(t, "待命中", "idle"); return; }
         const i = state.next++;
         setRow(t, `上傳中 #${i + 1}`, "live");
@@ -130,10 +129,8 @@
           if (!res.ok) throw new Error("HTTP " + res.status);
           try {
             const js = await res.json();
-            if (js && js.linear && !state.linear) {
-              state.linear = true;
-              if (note) note.textContent = `已超過頻寬配額，限速 ${js.throttle_mbps || 90} Mbps・鎖定單線程`;
-              window.toast("已限速：切換為單線程");
+            if (js && js.throttled && note) {
+              note.textContent = `分享頻寬限速中（約 ${js.throttle_mbps || 90} Mbps），上傳繼續`;
             }
           } catch { /* 非 JSON 回應就忽略 */ }
         } catch (err) { state.failed = err; setRow(t, "失敗", "err"); return; }
@@ -207,7 +204,7 @@
       if (!size) { window.location.href = url; return; } // 後備：直接下載
       const n = Math.min(THREADS, Math.max(1, Math.ceil(size / (256 * 1024))));
       const part = Math.ceil(size / n);
-      window.toast(`16 線程下載中… ${name}`);
+      window.toast(`下載中… ${name}`);
       const bufs = new Array(n);
       let cursor = 0;
       async function worker() {
@@ -230,7 +227,7 @@
       setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
       window.toast("下載完成");
     } catch (err) {
-      window.toast("多線程下載失敗，改用直接下載");
+      window.toast("下載失敗，改用直接下載");
       window.location.href = url;
     } finally { btn.loading = false; }
   }
@@ -290,6 +287,21 @@
           window.location.href = btn.getAttribute("data-delete");
         }
       });
+    });
+
+    // 程式碼區塊複製鈕
+    document.querySelectorAll("pre.curl, .mdui-prose pre").forEach((pre) => {
+      if (pre.parentElement && pre.parentElement.classList.contains("codeblock")) return;
+      const wrap = document.createElement("div");
+      wrap.className = "codeblock";
+      pre.replaceWith(wrap);
+      wrap.appendChild(pre);
+      const btn = document.createElement("mdui-button-icon");
+      btn.setAttribute("icon", "content_copy");
+      btn.setAttribute("title", "複製");
+      btn.className = "copybtn";
+      btn.addEventListener("click", () => copyText(pre.innerText, "已複製"));
+      wrap.appendChild(btn);
     });
 
     // 建立空資料夾

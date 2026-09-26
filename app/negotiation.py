@@ -1,10 +1,7 @@
 """Browser vs. API-client content negotiation.
 
-Rule: browsers (a browser User-Agent + Accept: text/html) get the MDUI HTML
-UI; scripts, curl, and AI agents (Accept: */* or application/json, or a
-non-browser User-Agent) get the plain JSON / text API responses.
-
-`?format=html` / `?format=json` / `?format=text` forces one or the other.
+Browsers (browser UA + Accept: text/html) get HTML; scripts/agents get
+JSON/text. `?format=html|json|text` forces one.
 """
 
 from __future__ import annotations

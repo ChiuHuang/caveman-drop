@@ -1,36 +1,65 @@
 :root { color-scheme: light dark; }
-.page { max-width: 960px; margin: 0 auto; padding: 24px 16px 64px; }
-.hero { padding: 28px; margin-bottom: 16px; }
-.hero h1 { margin: 0 0 8px; font-size: 2rem; }
-.hero p { opacity: .8; }
-.grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
-.stack { display: grid; gap: 16px; }
-.card-pad { padding: 20px; }
-.ep-card { padding: 16px; margin-bottom: 12px; }
-.ep-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.ep-path { font-size: .9rem; overflow-wrap: anywhere; }
-.ep-desc { opacity: .75; }
+.page { max-width: 960px; margin: 0 auto; padding: 16px 16px 48px; }
+.hero { padding: 16px 20px; margin-bottom: 12px; }
+.hero h1 { margin: 0 0 4px; font-size: 1.5rem; }
+.hero p { opacity: .8; margin: 4px 0 12px; }
+.grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+.stack { display: grid; gap: 12px; }
+.card-pad { padding: 16px 20px; }
+.card-pad h2 { margin: 4px 0 8px; font-size: 1.15rem; }
+.ep-card { padding: 14px 16px; margin-bottom: 10px; }
+.ep-method { font-weight: 700; font-size: 1rem; }
+.ep-verb { display: inline-block; min-width: 52px; }
+.ep-method code { font-size: .9rem; overflow-wrap: anywhere; }
+.ep-desc { opacity: .75; margin: 6px 0; }
 .ep-actions { display: flex; gap: 8px; }
-.method { font-weight: 700; }
 .fname { font-weight: 600; overflow-wrap: anywhere; }
 .fmeta { font-size: .8rem; opacity: .65; }
 .file-list { border-radius: 12px; }
 .empty { padding: 20px; text-align: center; opacity: .8; }
-.form-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: end; margin: 12px 0; }
+.form-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
 .result-box { margin-top: 12px; }
 .result-box code { overflow-wrap: anywhere; }
-pre.curl { background: rgba(127,127,127,.12); padding: 12px; border-radius: 8px; overflow-x: auto; }
-.foot { text-align: center; opacity: .55; padding: 24px; font-size: .8rem; }
+input[type="file"] { font: inherit; font-size: .9rem; max-width: 100%; }
+input[type="file"]::file-selector-button {
+  font: inherit; font-weight: 600; cursor: pointer;
+  border: 0; border-radius: 999px; padding: 8px 18px; margin-right: 10px;
+  background: rgb(var(--mdui-color-primary)); color: rgb(var(--mdui-color-on-primary));
+}
+input[type="file"]::file-selector-button:hover { filter: brightness(1.08); }
+/* devlogger 式深色程式碼塊 */
+.codeblock { position: relative; }
+.codeblock .copybtn { position: absolute; top: 6px; right: 6px; }
+pre.curl, .mdui-prose pre {
+  background: #2f3648; color: #e8eaf2;
+  padding: 14px 48px 14px 16px; border-radius: 12px;
+  overflow-x: auto; font-size: .85rem; line-height: 1.6; margin: 10px 0;
+}
+pre.curl code, .mdui-prose pre code { background: transparent; color: inherit; padding: 0; }
 .muted { opacity: .65; font-size: .9rem; }
 .nav-foot { padding: 12px; font-size: .8rem; opacity: .65; }
-.prose-wrap { padding: 24px; }
+.prose-wrap { padding: 20px 24px; }
+/* 文件排版（自帶，不依賴 CDN） */
+.mdui-prose { line-height: 1.75; overflow-wrap: break-word; }
+.mdui-prose h1 { font-size: 1.6rem; margin: 4px 0 12px; }
+.mdui-prose h2 { font-size: 1.3rem; margin: 22px 0 8px; padding-top: 8px; border-top: 1px solid rgba(127,127,127,.25); }
+.mdui-prose h2:first-child { border-top: 0; margin-top: 0; padding-top: 0; }
+.mdui-prose h3 { font-size: 1.1rem; margin: 16px 0 6px; }
+.mdui-prose p { margin: 8px 0; }
+.mdui-prose ul, .mdui-prose ol { margin: 8px 0; padding-left: 24px; }
+.mdui-prose li { margin: 4px 0; }
+.mdui-prose code { background: rgba(127,127,127,.2); padding: 2px 6px; border-radius: 6px; font-size: .85em; }
+.mdui-prose a { color: rgb(var(--mdui-color-primary)); }
+.mdui-prose table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: .85rem; display: block; overflow-x: auto; }
+.mdui-prose th, .mdui-prose td { border: 1px solid rgba(127,127,127,.3); padding: 6px 10px; text-align: left; }
+.mdui-prose th { background: rgba(127,127,127,.15); }
+.mdui-prose blockquote { border-left: 3px solid rgb(var(--mdui-color-primary)); margin: 10px 0; padding: 2px 12px; opacity: .85; }
 mdui-card { --mdui-shape-corner-medium: 16px; }
 .dropzone { border: 2px dashed rgba(127,127,127,.5); border-radius: 16px; padding: 32px; text-align: center; cursor: pointer; }
 .dropzone.dragover { border-color: rgb(var(--mdui-color-primary)); background: rgba(127,127,127,.08); }
 .docs-layout { display: grid; grid-template-columns: 240px 1fr; gap: 16px; }
 @media (max-width: 720px) { .docs-layout { grid-template-columns: 1fr; } }
 .docs-nav { position: sticky; top: 16px; align-self: start; }
-/* ---- 上傳線程監控面板（IDM 風格） ---- */
 .tp { margin-top: 12px; border-top: 1px solid rgba(127,127,127,.25); padding-top: 12px; }
 .tp-top { display: flex; gap: 12px; align-items: baseline; margin-bottom: 8px; flex-wrap: wrap; }
 .tp-top strong { font-size: 1.1rem; }

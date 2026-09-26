@@ -12,7 +12,8 @@ J = {"User-Agent": "curl/8.0", "Accept": "*/*"}
 # --- logged-out: public UI visible ---
 r = c.get("/", headers=B)
 print("browser /:", r.status_code, r.headers["content-type"], "mdui" in r.text.lower())
-assert "16 線程" in r.text and "data-chunked" in r.text and "data-tp" in r.text
+assert "data-chunked" in r.text and "data-tp" in r.text
+assert "16 線程" not in r.text and "瀏覽器使用圖形介面" not in r.text
 r = c.get("/", headers=J)
 print("curl /:", r.status_code, r.text.splitlines()[0])
 assert r.text.startswith("CaveMan Drop")
@@ -47,7 +48,8 @@ print("upload OK:", f.json()["filename"], f.json()["size_bytes"])
 g = c.get(f"/api/public/folder/{folder}", headers=J)
 assert g.status_code == 200 and len(g.json()["files"]) == 1
 g = c.get(f"/api/public/folder/{folder}", headers=B)
-assert "16 線程下載" in g.text and "data-preview" in g.text
+assert "data-mt-download" in g.text and "data-preview" in g.text
+assert "16 線程下載" not in g.text
 print("folder json+html OK")
 
 d = c.get(f"/dl/pub/{folder}/{fid}", headers=J)
@@ -78,16 +80,31 @@ d = c.get(f"/dl/pub/{pfold}/{pfid}", headers=J)
 assert d.content == pblob + b"z"
 print("public chunked upload+merge OK")
 
-# --- bandwidth verdict unit check ---
+# --- bandwidth tiers: 100MB->90, 1GB->80 ... floor 40, reset per window ---
 from app import storage as _st
+assert _st.throttle_mbps_for(50 * 1024 * 1024) is None
+assert _st.throttle_mbps_for(150 * 1024 * 1024) == 90
+assert _st.throttle_mbps_for(int(1.2 * 1024**3)) == 80
+assert _st.throttle_mbps_for(int(2.5 * 1024**3)) == 70
+assert _st.throttle_mbps_for(int(9 * 1024**3)) == 40
 _st.bw_record("9.9.9.9", None, 150 * 1024 * 1024)
 st = _st.bw_status("9.9.9.9")
-assert st["throttled"] and st["linear"] and st["threads"] == 1 and st["throttle_mbps"] == 90
+assert st["throttled"] and st["threads"] == 16 and st["throttle_mbps"] == 90
 st2 = _st.bw_status("8.8.8.8")
 assert not st2["throttled"] and st2["threads"] == 16
-print("bandwidth throttle verdict OK")
+print("bandwidth tiers OK")
+
+# --- CF real IP: chunk recorded under CF-Connecting-IP, not peer ---
+rr = c.post("/api/public/chunk", headers={**J, "CF-Connecting-IP": "1.2.3.4"},
+            files={"file_chunk": ("c", b"cf")},
+            data={"upload_id": str(uuid.uuid4()), "index": "0", "filename": "cf.bin"})
+assert rr.status_code == 200
+assert _st.bw_total("ip:1.2.3.4") == 2
+print("CF real IP OK")
 
 # --- login -> private mode, public upload hidden ---
+# Push the test IP over budget first: private session must stay exempt.
+_st.bw_record("testclient", None, 200 * 1024 * 1024)
 r = c.post("/login", headers=J, data={"password": "passw"})
 assert r.status_code == 200
 print("login OK")
@@ -114,6 +131,7 @@ for i in range(total):
     rr = c.post("/api/upload_chunk", headers=J, files={"file_chunk": ("c", blob[i*CS:(i+1)*CS])},
                 data={"upload_id": uid, "index": str(i), "filename": "big.bin"})
     assert rr.status_code == 200, rr.text
+    assert rr.json().get("exempt") is True and rr.json()["threads"] == 16
 m = c.post("/api/merge_chunks", headers=J, json={"upload_id": uid, "filename": "big.bin", "total_chunks": total})
 assert m.json()["success"]
 priv_id = m.json()["file_id"]

@@ -28,6 +28,7 @@ from ..storage import (
     bw_status,
     check_rate_limit,
     chunk_dir,
+    client_ip,
     folder_lock,
     public_folder_dir,
     public_folder_files,
@@ -54,7 +55,7 @@ async def public_upload(
     folder: Optional[str] = Form(None),
 ):
     """Anonymous upload. Omit folder to create a new share folder."""
-    ip = request.client.host if request.client else "unknown"
+    ip = client_ip(request)
     check_rate_limit(ip)
 
     if folder:
@@ -70,8 +71,6 @@ async def public_upload(
         fdir = public_folder_dir(folder_id)
         os.makedirs(fdir, exist_ok=True)
 
-    # Serialize uploads into the same folder so the aggregate quota cannot be
-    # bypassed by two concurrent requests racing on the file count/size.
     async with folder_lock(folder_id):
         existing_files = public_folder_files(folder_id)
         becomes_multi = len(existing_files) >= 1
@@ -122,9 +121,8 @@ async def public_upload(
                         )
                     out.write(chunk)
                     bw_record(ip, folder_id, len(chunk))
-                    # Pace throttled uploaders to THROTTLE_MBPS (checked per MB).
                     if written - paced_at >= 1024 * 1024:
-                        await bw_pace(written - paced_at, bw_status(ip, folder_id)["throttled"])
+                        await bw_pace(ip, written - paced_at, bw_status(ip, folder_id)["throttle_mbps"])
                         paced_at = written
         except HTTPException:
             if os.path.exists(dest):
@@ -193,13 +191,8 @@ async def public_chunk(
     index: int = Form(...),
     filename: str = Form(...),
 ):
-    """One chunk of a public 16-thread upload. Anyone may use it.
-
-    Returns the bandwidth verdict: `threads` is 16 normally, 1 with
-    `throttle_mbps` when this IP blew its per-minute budget (90 Mbps cap,
-    locked linear). The rate-limit quota is consumed at merge time, not here.
-    """
-    ip = request.client.host if request.client else "unknown"
+    """One chunk of a public chunked upload. Returns the bandwidth verdict."""
+    ip = client_ip(request)
     validate_upload_id(upload_id)
     if index < 0 or index >= 2048:
         raise HTTPException(400, "Chunk index out of range")
@@ -212,14 +205,14 @@ async def public_chunk(
         f.write(data)
     bw_record(ip, None, len(data))
     status = bw_status(ip)
-    await bw_pace(len(data), status["throttled"])
+    await bw_pace(ip, len(data), status["throttle_mbps"])
     return {"ok": True, **status}
 
 
 @router.post("/api/public/merge_chunks")
 async def public_merge_chunks(request: Request, payload: PublicMergePayload):
     """Assemble a public chunked upload into a (new or existing) folder."""
-    ip = request.client.host if request.client else "unknown"
+    ip = client_ip(request)
     check_rate_limit(ip)
     validate_upload_id(payload.upload_id)
 

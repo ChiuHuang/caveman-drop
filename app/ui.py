@@ -70,12 +70,11 @@ def page(
     <div style="padding:8px">
       <mdui-list>{"".join(nav_html)}</mdui-list>
       <mdui-divider></mdui-divider>
-      <div class="nav-foot">匿名檔案分享。<br>機器 / AI 請看 <a href="/llms.txt">/llms.txt</a></div>
+      <div class="nav-foot">匿名檔案分享 · <a href="https://github.com/ChiuHuang/caveman-drop">GitHub</a><br>機器 / AI 請看 <a href="/llms.txt">/llms.txt</a></div>
     </div>
   </mdui-navigation-drawer>
   <mdui-layout-main>
     <main class="page">{body}</main>
-    <footer class="foot">CaveMan Drop · 瀏覽器使用圖形介面，程式與 AI 使用純文字 API</footer>
   </mdui-layout-main>
 </mdui-layout>
 <mdui-snackbar id="toast" close-on-outside-click></mdui-snackbar>
@@ -133,8 +132,8 @@ def endpoint_card(method: str, path: str, desc: str, href: str | None = None) ->
     )
     return (
         '<mdui-card variant="outlined" class="ep-card">'
-        f'<div class="ep-row"><mdui-chip class="method">{html.escape(method)}</mdui-chip>'
-        f'<code class="ep-path">{html.escape(path)}</code></div>'
+        f'<div class="ep-method"><span class="ep-verb">{html.escape(method)}</span> '
+        f"<code>{html.escape(path)}</code></div>"
         f'<p class="ep-desc">{html.escape(desc)}</p>'
         f'<div class="ep-actions">{link}</div>'
         "</mdui-card>"
@@ -142,7 +141,7 @@ def endpoint_card(method: str, path: str, desc: str, href: str | None = None) ->
 
 
 def file_rows(files: list[dict], folder_id: str, base: str) -> str:
-    """Public folder file list: download + multi-thread download + preview + copy."""
+    """Public folder file list: preview + download + copy (one download path)."""
     if not files:
         return '<mdui-card variant="filled" class="empty">這個資料夾還沒有檔案。</mdui-card>'
     rows = []
@@ -155,8 +154,7 @@ def file_rows(files: list[dict], folder_id: str, base: str) -> str:
             f'<div><div class="fname">{html.escape(f["name"])}</div>'
             f'<div class="fmeta">{fmt_size(f["size"])} · {html.escape(str(f.get("content_type", "")))} · {fmt_time(f.get("ctime", 0))}</div></div>'
             f'<mdui-button-icon slot="end-icon" icon="visibility" data-preview="{html.escape(preview)}" data-name="{html.escape(f["name"])}" title="預覽"></mdui-button-icon>'
-            f'<a slot="end-icon" href="{html.escape(dl)}"><mdui-button-icon icon="download" title="下載"></mdui-button-icon></a>'
-            f'<mdui-button slot="end-icon" variant="text" data-mt-download="{html.escape(dl)}" data-name="{html.escape(f["name"])}" data-size="{f["size"]}">16 線程下載</mdui-button>'
+            f'<mdui-button-icon slot="end-icon" icon="download" data-mt-download="{html.escape(dl)}" data-name="{html.escape(f["name"])}" data-size="{f["size"]}" title="下載"></mdui-button-icon>'
             f'<mdui-button slot="end-icon" variant="text" data-copy="{html.escape(dl)}">複製連結</mdui-button>'
             "</mdui-list-item>"
         )
@@ -164,7 +162,7 @@ def file_rows(files: list[dict], folder_id: str, base: str) -> str:
 
 
 def private_file_rows(files: list[dict], base: str) -> str:
-    """Private file list: preview + download + 16-thread download + copy + delete."""
+    """Private file list: preview + download + copy + delete (one download path)."""
     if not files:
         return '<mdui-card variant="filled" class="empty">還沒有私人檔案，先從上方上傳吧。</mdui-card>'
     rows = []
@@ -177,8 +175,7 @@ def private_file_rows(files: list[dict], base: str) -> str:
             f'<div><div class="fname">{html.escape(f["name"])}</div>'
             f'<div class="fmeta">{fmt_size(f.get("bytes", 0))} · {fmt_time(f.get("ctime", 0))}</div></div>'
             f'<mdui-button-icon slot="end-icon" icon="visibility" data-preview="{html.escape(pv)}" data-name="{html.escape(f["name"])}" title="預覽"></mdui-button-icon>'
-            f'<a slot="end-icon" href="{html.escape(dl)}"><mdui-button-icon icon="download" title="下載"></mdui-button-icon></a>'
-            f'<mdui-button slot="end-icon" variant="text" data-mt-download="{html.escape(dl)}" data-name="{html.escape(f["name"])}" data-size="{f.get("bytes", 0)}">16 線程下載</mdui-button>'
+            f'<mdui-button-icon slot="end-icon" icon="download" data-mt-download="{html.escape(dl)}" data-name="{html.escape(f["name"])}" data-size="{f.get("bytes", 0)}" title="下載"></mdui-button-icon>'
             f'<mdui-button slot="end-icon" variant="text" data-copy="{html.escape(dl)}">直接連結</mdui-button>'
             f'<mdui-button slot="end-icon" variant="text" data-delete="{html.escape(base + "/del/" + f["id"])}" data-name="{html.escape(f["name"])}">刪除</mdui-button>'
             "</mdui-list-item>"
@@ -187,11 +184,11 @@ def private_file_rows(files: list[dict], base: str) -> str:
 
 
 def private_panel(files: list[dict], base: str) -> str:
-    """Private-mode dashboard fragment: 16-thread chunked upload + file list."""
+    """Private-mode dashboard fragment: chunked upload + file list."""
     return f"""
         <mdui-card variant="outlined" class="card-pad">
-          <h2>上傳檔案（16 線程分段上傳）</h2>
-          <p class="muted">大檔案會自動切成 4 MB 分塊，以 16 條並行上傳，可暫停，可看每條線程即時狀態。</p>
+          <h2>上傳檔案</h2>
+          <p class="muted">大檔案會自動分段上傳，可暫停，並即時顯示上傳進度。登入狀態不受頻寬限速影響。</p>
           <form action="/api/upload_chunk" method="post" data-chunked data-merge="/api/merge_chunks">
             <div class="form-row">
               <input type="file" name="file" required>
