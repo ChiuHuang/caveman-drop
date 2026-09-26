@@ -178,7 +178,7 @@ async def public_chunk(
     """One chunk of a public chunked upload. Returns the bandwidth verdict."""
     ip = client_ip(request)
     validate_upload_id(upload_id)
-    if index < 0 or index >= 2048:
+    if index < 0 or index >= settings.max_chunked_parts:
         raise HTTPException(400, "Chunk index out of range")
     data = await file_chunk.read()
     await file_chunk.close()

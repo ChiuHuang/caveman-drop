@@ -84,7 +84,7 @@ async def upload_chunk(
     ip = client_ip(request)
     authed = bool(request.session.get("auth"))
     validate_upload_id(upload_id)
-    if index < 0 or index >= 2048:
+    if index < 0 or index >= settings.max_chunked_parts:
         raise HTTPException(400, "Chunk index out of range")
     data = await file_chunk.read()
     await file_chunk.close()

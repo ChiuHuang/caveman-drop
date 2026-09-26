@@ -26,7 +26,6 @@ _bw_bytes: dict[str, deque] = defaultdict(deque)  # "ip:<ip>" / "folder:<id>" ->
 _bw_folders: dict[str, deque] = defaultdict(deque)  # ip -> [(ts, folder_id)]
 _pace_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 _pace_next: dict[str, float] = {}
-MAX_CHUNKED_PARTS = 2048
 MAX_CHUNK_BYTES = 32 * 1024 * 1024
 
 
@@ -161,8 +160,9 @@ def chunk_dir(prefix: str, upload_id: str) -> str:
 
 def assemble_chunks(chunk_dirname: str, dest: str, total_chunks: int, max_bytes: int | None) -> int:
     """Concatenate part_0..N into dest, then clean up. None = no size cap."""
-    if not 1 <= total_chunks <= MAX_CHUNKED_PARTS:
-        raise HTTPException(400, f"total_chunks must be 1..{MAX_CHUNKED_PARTS}")
+    limit = settings.max_chunked_parts
+    if not 1 <= total_chunks <= limit:
+        raise HTTPException(400, f"total_chunks must be 1..{limit}")
     written = 0
     try:
         with open(dest, "wb") as out:

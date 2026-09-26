@@ -104,6 +104,15 @@ assert rr.status_code == 200
 assert _st.bw_total("ip:1.2.3.4") == 2
 print("CF real IP OK")
 
+# --- high chunk indices accepted (big files) ---
+big_uid = str(uuid.uuid4())
+rr = c.post("/api/public/chunk", headers=J, files={"file_chunk": ("c", b"hi")},
+            data={"upload_id": big_uid, "index": "2048", "filename": "huge.bin"})
+assert rr.status_code == 200, rr.text
+import shutil
+shutil.rmtree(f"airdrop_tmp/pub_{big_uid}", ignore_errors=True)
+print("high chunk index OK")
+
 # --- login -> private mode, public upload hidden ---
 # Push the test IP over budget first: private session must stay exempt.
 _st.bw_record("testclient", None, 200 * 1024 * 1024)
