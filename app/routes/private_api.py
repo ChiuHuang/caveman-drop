@@ -15,7 +15,17 @@ from pydantic import BaseModel
 
 from ..config import settings
 from ..negotiation import wants_html
-from ..storage import private_files, stream_download
+from ..storage import (
+    MAX_CHUNK_BYTES,
+    assemble_chunks,
+    bw_pace,
+    bw_record,
+    bw_status,
+    chunk_dir,
+    private_files,
+    stream_download,
+    validate_upload_id,
+)
 from ..ui import page, private_panel
 
 router = APIRouter()
@@ -70,31 +80,32 @@ async def upload_chunk(
     filename: str = Form(...),
 ):
     _check_private(request)
-    chunk_dir = os.path.join(settings.tmp_dir, upload_id)
-    os.makedirs(chunk_dir, exist_ok=True)
-    with open(os.path.join(chunk_dir, f"part_{index}"), "wb") as f:
-        f.write(await file_chunk.read())
-    return "OK"
+    ip = request.client.host if request.client else "unknown"
+    validate_upload_id(upload_id)
+    if index < 0 or index >= 2048:
+        raise HTTPException(400, "Chunk index out of range")
+    data = await file_chunk.read()
+    await file_chunk.close()
+    if len(data) > MAX_CHUNK_BYTES:
+        raise HTTPException(413, "Chunk too large")
+    cdir = chunk_dir("priv", upload_id)
+    with open(os.path.join(cdir, f"part_{index}"), "wb") as f:
+        f.write(data)
+    bw_record(ip, None, len(data))
+    status = bw_status(ip)
+    await bw_pace(len(data), status["throttled"])
+    return {"ok": True, **status}
 
 
 @router.post("/api/merge_chunks")
 async def merge_chunks(request: Request, payload: MergePayload):
     _check_private(request)
+    validate_upload_id(payload.upload_id)
     fid = str(uuid.uuid4())
     _, ext = os.path.splitext(payload.filename)
     final_path = os.path.join(settings.upload_dir, fid + ext)
-    chunk_dir = os.path.join(settings.tmp_dir, payload.upload_id)
-    with open(final_path, "wb") as out:
-        for i in range(payload.total_chunks):
-            part = os.path.join(chunk_dir, f"part_{i}")
-            if os.path.exists(part):
-                with open(part, "rb") as p:
-                    out.write(p.read())
-                os.remove(part)
-    try:
-        os.rmdir(chunk_dir)
-    except OSError:
-        pass
+    cdir = os.path.join(settings.tmp_dir, f"priv_{payload.upload_id}")
+    assemble_chunks(cdir, final_path, payload.total_chunks, settings.max_file_size)
     with open(os.path.join(settings.upload_dir, fid + ".json"), "w", encoding="utf-8") as f:
         json.dump({"filename": payload.filename, "ext": ext}, f)
     return {"success": True, "file_id": fid}

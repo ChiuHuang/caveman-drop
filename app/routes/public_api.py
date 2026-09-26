@@ -16,20 +16,35 @@ from typing import Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
+from pydantic import BaseModel
 
 from ..config import settings
 from ..negotiation import wants_html
 from ..storage import (
+    MAX_CHUNK_BYTES,
+    assemble_chunks,
+    bw_pace,
+    bw_record,
+    bw_status,
     check_rate_limit,
+    chunk_dir,
     folder_lock,
     public_folder_dir,
     public_folder_files,
     stream_download,
     validate_public_id,
+    validate_upload_id,
 )
 from ..ui import file_rows, page
 
 router = APIRouter()
+
+
+class PublicMergePayload(BaseModel):
+    upload_id: str
+    filename: str
+    total_chunks: int
+    folder: Optional[str] = None
 
 
 @router.post("/api/public/upload")
@@ -88,6 +103,7 @@ async def public_upload(
 
         try:
             with open(dest, "wb") as out:
+                paced_at = 0
                 while True:
                     chunk = await file.read(CHUNK)
                     if not chunk:
@@ -105,6 +121,11 @@ async def public_upload(
                             "once it contains more than one file",
                         )
                     out.write(chunk)
+                    bw_record(ip, folder_id, len(chunk))
+                    # Pace throttled uploaders to THROTTLE_MBPS (checked per MB).
+                    if written - paced_at >= 1024 * 1024:
+                        await bw_pace(written - paced_at, bw_status(ip, folder_id)["throttled"])
+                        paced_at = written
         except HTTPException:
             if os.path.exists(dest):
                 os.remove(dest)
@@ -161,6 +182,109 @@ async def public_create_folder(request: Request):
         "folder_url": f"{base}/f/{folder_id}",
         "upload_url": f"{base}/f/{folder_id}",
         "folder_api_url": f"{base}/api/public/folder/{folder_id}",
+    }
+
+
+@router.post("/api/public/chunk")
+async def public_chunk(
+    request: Request,
+    file_chunk: UploadFile = File(...),
+    upload_id: str = Form(...),
+    index: int = Form(...),
+    filename: str = Form(...),
+):
+    """One chunk of a public 16-thread upload. Anyone may use it.
+
+    Returns the bandwidth verdict: `threads` is 16 normally, 1 with
+    `throttle_mbps` when this IP blew its per-minute budget (90 Mbps cap,
+    locked linear). The rate-limit quota is consumed at merge time, not here.
+    """
+    ip = request.client.host if request.client else "unknown"
+    validate_upload_id(upload_id)
+    if index < 0 or index >= 2048:
+        raise HTTPException(400, "Chunk index out of range")
+    data = await file_chunk.read()
+    await file_chunk.close()
+    if len(data) > MAX_CHUNK_BYTES:
+        raise HTTPException(413, "Chunk too large")
+    cdir = chunk_dir("pub", upload_id)
+    with open(os.path.join(cdir, f"part_{index}"), "wb") as f:
+        f.write(data)
+    bw_record(ip, None, len(data))
+    status = bw_status(ip)
+    await bw_pace(len(data), status["throttled"])
+    return {"ok": True, **status}
+
+
+@router.post("/api/public/merge_chunks")
+async def public_merge_chunks(request: Request, payload: PublicMergePayload):
+    """Assemble a public chunked upload into a (new or existing) folder."""
+    ip = request.client.host if request.client else "unknown"
+    check_rate_limit(ip)
+    validate_upload_id(payload.upload_id)
+
+    if payload.folder:
+        folder_id = payload.folder
+        validate_public_id(folder_id, "folder id")
+        fdir = public_folder_dir(folder_id)
+        if not os.path.isdir(fdir):
+            raise HTTPException(404, "Folder not found")
+    else:
+        import uuid
+
+        folder_id = str(uuid.uuid4())
+        fdir = public_folder_dir(folder_id)
+        os.makedirs(fdir, exist_ok=True)
+
+    async with folder_lock(folder_id):
+        existing_files = public_folder_files(folder_id)
+        becomes_multi = len(existing_files) >= 1
+        existing_total = sum(f["size"] for f in existing_files)
+
+        import uuid
+
+        fid = str(uuid.uuid4())
+        original_name = os.path.basename(payload.filename or "unnamed") or "unnamed"
+        _, ext = os.path.splitext(original_name)
+        ext = ext[:32] if re.fullmatch(r"\.[A-Za-z0-9._-]+", ext or "") else ""
+        dest = os.path.join(fdir, fid + ext)
+        cdir = os.path.join(settings.tmp_dir, f"pub_{payload.upload_id}")
+        written = assemble_chunks(cdir, dest, payload.total_chunks, settings.max_file_size)
+        if written > settings.max_file_size:
+            raise HTTPException(413, "File exceeds the per-file limit")
+        if becomes_multi and existing_total + written > settings.max_multi_folder_total:
+            os.remove(dest)
+            raise HTTPException(413, "This folder is over its combined size limit")
+
+        content_type = mimetypes.guess_type(original_name)[0] or "application/octet-stream"
+        with open(os.path.join(fdir, fid + ".json"), "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "filename": original_name,
+                    "ext": ext,
+                    "content_type": content_type,
+                    "ctime": __import__("time").time(),
+                },
+                f,
+            )
+        bw_record(ip, folder_id, written)
+
+    base = str(request.base_url).rstrip("/")
+    download_url = f"{base}/dl/pub/{folder_id}/{fid}"
+    folder_url = f"{base}/f/{folder_id}"
+    return {
+        "success": True,
+        "folder_id": folder_id,
+        "file_id": fid,
+        "filename": original_name,
+        "size_bytes": written,
+        "content_type": content_type,
+        "url": download_url,
+        "download_url": download_url,
+        "folder_url": folder_url,
+        "share_url": folder_url,
+        "folder_api_url": f"{base}/api/public/folder/{folder_id}",
+        "file_api_url": f"{base}/api/public/file/{folder_id}/{fid}",
     }
 
 

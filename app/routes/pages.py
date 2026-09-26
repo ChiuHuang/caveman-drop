@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from ..config import settings
 from ..negotiation import wants_html
 from ..storage import private_files, public_folder_files
-from ..ui import endpoint_card, file_rows, page, private_panel
+from ..ui import endpoint_card, file_rows, page, private_panel, public_upload_form
 
 router = APIRouter()
 
@@ -55,14 +55,9 @@ def _dashboard_html(request: Request, authed: bool) -> str:
         </mdui-card>
         <div class="stack">
           <mdui-card variant="outlined" class="card-pad">
-            <h2>公開上傳</h2>
-            <form action="/api/public/upload" method="post" enctype="multipart/form-data" data-ajax-upload>
-              <div class="form-row">
-                <input type="file" name="file" required>
-                <mdui-button type="submit">上傳</mdui-button>
-              </div>
-            </form>
-            <div data-upload-result></div>
+            <h2>公開上傳（16 線程，人人可用）</h2>
+            <p class="muted">免帳號。檔案切成 4 MB 分塊、16 條並行上傳，下方即時顯示每條線程與分段進度。</p>
+            {public_upload_form()}
           </mdui-card>
           <mdui-card variant="outlined" class="card-pad">
             <h2>私人空間</h2>
@@ -197,22 +192,15 @@ async def logout(request: Request):
 def _upload_html() -> str:
     return page(
         "上傳",
-        """
+        f"""
         <mdui-card variant="filled" class="card-pad hero">
           <h1>公開上傳</h1>
-          <p>免帳號。上傳後立刻拿到永久連結。</p>
+          <p>免帳號，16 線程分段上傳。上傳後立刻拿到永久連結。</p>
         </mdui-card>
         <div class="stack">
           <mdui-card variant="outlined" class="card-pad">
             <h2>上傳檔案</h2>
-            <form action="/api/public/upload" method="post" enctype="multipart/form-data" data-ajax-upload>
-              <div class="form-row">
-                <input type="file" name="file" required>
-                <mdui-text-field name="folder" label="資料夾 ID（選填，空白會建立新資料夾）"></mdui-text-field>
-                <mdui-button type="submit">上傳</mdui-button>
-              </div>
-            </form>
-            <div data-upload-result></div>
+            {public_upload_form()}
           </mdui-card>
           <mdui-card variant="outlined" class="card-pad">
             <h2>或先建立空資料夾</h2>
@@ -286,15 +274,8 @@ def _folder_html(request: Request, folder_id: str) -> HTMLResponse | None:
     else:
         add_card = f"""
           <mdui-card variant="outlined" class="card-pad">
-            <h2>加入檔案到此資料夾</h2>
-            <form action="/api/public/upload" method="post" enctype="multipart/form-data" data-ajax-upload>
-              <input type="hidden" name="folder" value="{html.escape(folder_id)}">
-              <div class="form-row">
-                <input type="file" name="file" required>
-                <mdui-button type="submit">上傳</mdui-button>
-              </div>
-            </form>
-            <div data-upload-result></div>
+            <h2>加入檔案到此資料夾（16 線程）</h2>
+            {public_upload_form(folder_id)}
           </mdui-card>"""
     body = page(
         f"資料夾 {folder_id[:8]}",

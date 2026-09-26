@@ -8,7 +8,7 @@ import mimetypes
 import os
 import re
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from typing import Any
 
 from fastapi import HTTPException, Request
@@ -20,6 +20,76 @@ PUBLIC_ID_RE = re.compile(r"^[0-9a-fA-F-]{36}$")
 
 _upload_log: dict[str, list[float]] = defaultdict(list)
 _public_folder_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+
+# ─── Bandwidth accounting (sliding 60 s windows) ─────────────────────────────
+_bw_bytes: dict[str, deque] = defaultdict(deque)  # "ip:<ip>" / "folder:<id>" -> [(ts, bytes)]
+_bw_folders: dict[str, deque] = defaultdict(deque)  # ip -> [(ts, folder_id)]
+_BW_WINDOW = 60.0
+MAX_CHUNKED_PARTS = 2048
+MAX_CHUNK_BYTES = 32 * 1024 * 1024
+
+
+def _prune(dq: deque, now: float) -> None:
+    while dq and now - dq[0][0] > _BW_WINDOW:
+        dq.popleft()
+
+
+def bw_record(ip: str, folder_id: str | None, nbytes: int) -> None:
+    """Record uploaded bytes for an IP (and folder, if known)."""
+    now = time.time()
+    dq = _bw_bytes[f"ip:{ip}"]
+    dq.append((now, nbytes))
+    _prune(dq, now)
+    if folder_id:
+        fdq = _bw_bytes[f"folder:{folder_id}"]
+        fdq.append((now, nbytes))
+        _prune(fdq, now)
+        touch = _bw_folders[ip]
+        touch.append((now, folder_id))
+        _prune(touch, now)
+
+
+def bw_total(key: str) -> int:
+    now = time.time()
+    dq = _bw_bytes[key]
+    _prune(dq, now)
+    return sum(b for _, b in dq)
+
+
+def bw_status(ip: str, folder_id: str | None = None) -> dict[str, Any]:
+    """Bandwidth verdict for an IP (+folder): full 16 threads or throttled.
+
+    Throttled when the IP pushed > soft MB/min, touched > N folders/min, or
+    blew the hard per-IP / per-folder caps. Throttled clients are paced to
+    THROTTLE_MBPS and told to lock to a single linear thread.
+    """
+    ip_b = bw_total(f"ip:{ip}")
+    folder_b = bw_total(f"folder:{folder_id}") if folder_id else 0
+    now = time.time()
+    touch = _bw_folders[ip]
+    _prune(touch, now)
+    folders = len({f for _, f in touch})
+    throttled = (
+        ip_b > settings.bw_ip_soft_bytes
+        or folders > settings.bw_folders_per_min
+        or ip_b > settings.bw_ip_hard_bytes
+        or folder_b > settings.bw_folder_hard_bytes
+    )
+    return {
+        "throttled": throttled,
+        "linear": throttled,
+        "threads": 1 if throttled else 16,
+        "throttle_mbps": settings.throttle_mbps if throttled else None,
+        "ip_bytes_per_min": ip_b,
+        "folder_bytes_per_min": folder_b,
+        "folders_per_min": folders,
+    }
+
+
+async def bw_pace(nbytes: int, throttled: bool) -> None:
+    """Sleep to cap effective throughput at THROTTLE_MBPS while throttled."""
+    if throttled and nbytes > 0:
+        await asyncio.sleep(nbytes / settings.throttle_bps)
 
 
 def check_rate_limit(ip: str) -> None:
@@ -41,6 +111,57 @@ def check_rate_limit(ip: str) -> None:
 def validate_public_id(value: str, label: str = "id") -> None:
     if not PUBLIC_ID_RE.fullmatch(value or ""):
         raise HTTPException(400, f"Invalid public {label}")
+
+
+def validate_upload_id(value: str) -> None:
+    if not PUBLIC_ID_RE.fullmatch(value or ""):
+        raise HTTPException(400, "Invalid upload id")
+
+
+def chunk_dir(prefix: str, upload_id: str) -> str:
+    """Scratch dir for one chunked upload. Prefix is a fixed server string."""
+    validate_upload_id(upload_id)
+    if not re.fullmatch(r"[a-z]+", prefix or ""):
+        raise HTTPException(400, "Invalid chunk prefix")
+    d = os.path.join(settings.tmp_dir, f"{prefix}_{upload_id}")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def assemble_chunks(chunk_dirname: str, dest: str, total_chunks: int, max_bytes: int) -> int:
+    """Concatenate part_0..N into dest (caps enforced), then clean up."""
+    if not 1 <= total_chunks <= MAX_CHUNKED_PARTS:
+        raise HTTPException(400, f"total_chunks must be 1..{MAX_CHUNKED_PARTS}")
+    written = 0
+    try:
+        with open(dest, "wb") as out:
+            for i in range(total_chunks):
+                part = os.path.join(chunk_dirname, f"part_{i}")
+                if not os.path.exists(part):
+                    raise HTTPException(400, f"Missing chunk {i}")
+                with open(part, "rb") as p:
+                    while True:
+                        c = p.read(1024 * 1024)
+                        if not c:
+                            break
+                        written += len(c)
+                        if written > max_bytes:
+                            raise HTTPException(413, "File exceeds the size limit")
+                        out.write(c)
+    except HTTPException:
+        if os.path.exists(dest):
+            os.remove(dest)
+        raise
+    for i in range(total_chunks):
+        try:
+            os.remove(os.path.join(chunk_dirname, f"part_{i}"))
+        except OSError:
+            pass
+    try:
+        os.rmdir(chunk_dirname)
+    except OSError:
+        pass
+    return written
 
 
 def public_folder_dir(folder_id: str) -> str:

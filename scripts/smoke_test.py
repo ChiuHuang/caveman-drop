@@ -12,7 +12,7 @@ J = {"User-Agent": "curl/8.0", "Accept": "*/*"}
 # --- logged-out: public UI visible ---
 r = c.get("/", headers=B)
 print("browser /:", r.status_code, r.headers["content-type"], "mdui" in r.text.lower())
-assert "公開上傳" in r.text and "data-ajax-upload" in r.text
+assert "16 線程" in r.text and "data-chunked" in r.text and "data-tp" in r.text
 r = c.get("/", headers=J)
 print("curl /:", r.status_code, r.text.splitlines()[0])
 assert r.text.startswith("CaveMan Drop")
@@ -28,8 +28,8 @@ assert r.text.startswith("# CaveMan Drop")
 print("llms OK")
 
 r = c.get("/upload", headers=B)
-assert "data-ajax-upload" in r.text
-print("browser /upload OK")
+assert "data-chunked" in r.text and "data-tp-segs" in r.text
+print("browser /upload OK (thread panel present)")
 
 r = c.get("/docs", headers=B)
 assert "docs-layout" in r.text
@@ -61,6 +61,32 @@ h = c.get(f"/f/{folder}", headers=B)
 assert "公開資料夾" in h.text and "加入檔案到此資料夾" in h.text
 print("share page OK")
 
+# --- public 16-thread chunked upload (everyone, no login) ---
+puid = str(uuid.uuid4())
+pblob = b"y" * 1000
+for i in range(2):
+    rr = c.post("/api/public/chunk", headers=J,
+                files={"file_chunk": ("c", pblob if i == 0 else b"z")},
+                data={"upload_id": puid, "index": str(i), "filename": "pub.bin"})
+    assert rr.status_code == 200, rr.text
+    assert rr.json()["threads"] == 16 and not rr.json()["throttled"]
+m = c.post("/api/public/merge_chunks", headers=J,
+           json={"upload_id": puid, "filename": "pub.bin", "total_chunks": 2})
+assert m.status_code == 200 and m.json()["size_bytes"] == 1001
+pfid, pfold = m.json()["file_id"], m.json()["folder_id"]
+d = c.get(f"/dl/pub/{pfold}/{pfid}", headers=J)
+assert d.content == pblob + b"z"
+print("public chunked upload+merge OK")
+
+# --- bandwidth verdict unit check ---
+from app import storage as _st
+_st.bw_record("9.9.9.9", None, 150 * 1024 * 1024)
+st = _st.bw_status("9.9.9.9")
+assert st["throttled"] and st["linear"] and st["threads"] == 1 and st["throttle_mbps"] == 90
+st2 = _st.bw_status("8.8.8.8")
+assert not st2["throttled"] and st2["threads"] == 16
+print("bandwidth throttle verdict OK")
+
 # --- login -> private mode, public upload hidden ---
 r = c.post("/login", headers=J, data={"password": "passw"})
 assert r.status_code == 200
@@ -68,7 +94,7 @@ print("login OK")
 
 r = c.get("/", headers=B)
 assert "私人模式" in r.text and "data-chunked" in r.text
-assert "data-ajax-upload" not in r.text, "public upload must be hidden when logged in"
+assert "/api/public/chunk" not in r.text, "public upload must be hidden when logged in"
 print("private-mode dashboard OK")
 
 r = c.get("/upload", headers=B, follow_redirects=False)

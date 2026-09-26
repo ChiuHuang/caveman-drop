@@ -23,26 +23,103 @@
     } catch { window.toast("複製失敗"); }
   }
 
-  // ---- 16 線程分段上傳 ----
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  function fmtMB(n) {
+    if (n < 1024) return n + " B";
+    if (n < 1048576) return (n / 1024).toFixed(1) + " KB";
+    if (n < 1073741824) return (n / 1048576).toFixed(1) + " MB";
+    return (n / 1073741824).toFixed(2) + " GB";
+  }
+
+  // ---- 16 線程分段上傳（含 IDM 式線程表 + 分段條 + 測速 + 暫停 + 限速鎖單線程）----
   async function chunkedUpload(form) {
     const input = form.querySelector('input[type="file"]');
     const file = input && input.files[0];
     if (!file) { window.toast("請先選擇檔案"); return; }
+    const mergeUrl = form.getAttribute("data-merge");
+    const isPublic = form.hasAttribute("data-public");
+    const folderInput = form.querySelector('[name="folder"]');
     const btn = form.querySelector("[type=submit]");
-    const bar = form.querySelector("[data-progress]");
-    const txt = form.querySelector("[data-progress-text]");
+    const panel = form.querySelector("[data-tp]");
+    const pct = panel && panel.querySelector("[data-tp-pct]");
+    const speed = panel && panel.querySelector("[data-tp-speed]");
+    const note = panel && panel.querySelector("[data-tp-note]");
+    const bar = panel && panel.querySelector("[data-tp-bar]");
+    const segsBox = panel && panel.querySelector("[data-tp-segs]");
+    const segCount = panel && panel.querySelector("[data-tp-segcount]");
+    const rowsBox = panel && panel.querySelector("[data-tp-rows]");
+    const pauseBtn = panel && panel.querySelector("[data-tp-pause]");
+
     const total = Math.max(1, Math.ceil(file.size / CHUNK));
     const uploadId = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()));
-    let next = 0, done = 0, failed = null;
+    const state = {
+      next: 0, done: 0, doneBytes: 0, failed: null,
+      paused: false, cancelled: false, linear: false, threads: Math.min(THREADS, total),
+    };
 
     if (btn) btn.loading = true;
-    if (bar) bar.style.display = "";
-    const show = () => { if (txt) txt.textContent = `上傳中… ${done}/${total} 塊`; };
-    show();
+    if (panel) panel.hidden = false;
 
-    async function worker() {
-      while (next < total && !failed) {
-        const i = next++;
+    // 線程表：16 列 No / 狀態
+    const rowEls = [];
+    if (rowsBox) {
+      rowsBox.innerHTML = "";
+      for (let t = 0; t < state.threads; t++) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${t + 1}</td><td class="st idle">待命中</td>`;
+        rowsBox.appendChild(tr);
+        rowEls.push(tr.querySelector(".st"));
+      }
+    }
+    // 分段條：最多 144 格，分塊映射到格子
+    const NCELL = Math.min(total, 144);
+    const cellOf = (i) => Math.floor((i * NCELL) / total);
+    const cellEls = [], cellNeed = new Array(NCELL).fill(0), cellGot = new Array(NCELL).fill(0);
+    for (let i = 0; i < total; i++) cellNeed[cellOf(i)]++;
+    if (segsBox) {
+      segsBox.innerHTML = "";
+      for (let k = 0; k < NCELL; k++) {
+        const s = document.createElement("i");
+        segsBox.appendChild(s);
+        cellEls.push(s);
+      }
+    }
+    if (segCount) segCount.textContent = `${total} 塊 / ${NCELL} 格`;
+    const setRow = (t, txt, cls) => {
+      if (!rowEls[t]) return;
+      rowEls[t].textContent = txt;
+      rowEls[t].className = "st " + cls;
+    };
+    const render = () => {
+      if (pct) pct.textContent = Math.floor((state.done / total) * 100) + "%";
+      if (bar) bar.value = state.done / total;
+    };
+    render();
+
+    // 測速：每 0.5 秒結算
+    let lastBytes = 0;
+    const speedTimer = setInterval(() => {
+      const v = (state.doneBytes - lastBytes) * 2;
+      lastBytes = state.doneBytes;
+      if (speed) speed.textContent = state.done >= total ? "完成" : `${fmtMB(v)}/s · ${state.done}/${total} 塊`;
+    }, 500);
+    if (pauseBtn) pauseBtn.addEventListener("click", () => {
+      state.paused = !state.paused;
+      pauseBtn.textContent = state.paused ? "繼續" : "暫停";
+      window.toast(state.paused ? "已暫停" : "繼續上傳");
+    });
+
+    async function worker(t) {
+      while (true) {
+        if (state.failed || state.cancelled) return;
+        while (state.paused && !state.failed) await sleep(200);
+        if (state.linear && t > 0) { setRow(t, "限速中・待命", "idle"); return; } // 鎖單線程
+        if (state.next >= total) { setRow(t, "待命中", "idle"); return; }
+        const i = state.next++;
+        setRow(t, `上傳中 #${i + 1}`, "live");
+        const cell = cellOf(i);
+        if (cellEls[cell]) cellEls[cell].classList.add("active");
         const fd = new FormData();
         fd.append("file_chunk", file.slice(i * CHUNK, (i + 1) * CHUNK), "chunk");
         fd.append("upload_id", uploadId);
@@ -51,26 +128,62 @@
         try {
           const res = await fetch(form.action, { method: "POST", body: fd });
           if (!res.ok) throw new Error("HTTP " + res.status);
-        } catch (err) { failed = err; return; }
-        done++; show();
+          try {
+            const js = await res.json();
+            if (js && js.linear && !state.linear) {
+              state.linear = true;
+              if (note) note.textContent = `已超過頻寬配額，限速 ${js.throttle_mbps || 90} Mbps・鎖定單線程`;
+              window.toast("已限速：切換為單線程");
+            }
+          } catch { /* 非 JSON 回應就忽略 */ }
+        } catch (err) { state.failed = err; setRow(t, "失敗", "err"); return; }
+        state.done++;
+        state.doneBytes += Math.min(CHUNK, file.size - i * CHUNK);
+        cellGot[cell]++;
+        if (cellGot[cell] >= cellNeed[cell] && cellEls[cell]) {
+          cellEls[cell].classList.remove("active");
+          cellEls[cell].classList.add("done");
+        }
+        setRow(t, `完成 #${i + 1}`, "ok");
+        render();
       }
     }
 
-    await Promise.all(Array.from({ length: Math.min(THREADS, total) }, worker));
-    if (failed) {
-      window.toast("上傳失敗：" + failed.message);
+    await Promise.all(Array.from({ length: state.threads }, (_, t) => worker(t)));
+    clearInterval(speedTimer);
+    if (state.failed) {
+      window.toast("上傳失敗：" + state.failed.message);
       if (btn) btn.loading = false;
       return;
     }
+    if (pct) pct.textContent = "合併中…";
     try {
-      const res = await fetch("/api/merge_chunks", {
+      const body = { upload_id: uploadId, filename: file.name, total_chunks: total };
+      if (isPublic && folderInput && folderInput.value.trim()) body.folder = folderInput.value.trim();
+      const res = await fetch(mergeUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ upload_id: uploadId, filename: file.name, total_chunks: total }),
+        body: JSON.stringify(body),
       });
-      if (!res.ok) throw new Error("HTTP " + res.status);
-      window.toast("上傳完成");
-      window.location.reload();
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || ("HTTP " + res.status));
+      if (btn) btn.loading = false;
+      if (isPublic) {
+        const out = form.parentElement.querySelector("[data-upload-result]");
+        const links = [data.download_url || data.url, data.folder_url || data.share_url]
+          .filter(Boolean).map((u) => `<div><a href="${u}"><code>${u}</code></a>
+            <mdui-button variant="text" data-copy="${u}">複製</mdui-button></div>`).join("");
+        if (out) {
+          out.innerHTML = `<mdui-card variant="filled" class="card-pad result-box">
+            <div><strong>已上傳：</strong> ${data.filename} (${fmtMB(data.size_bytes)})</div>${links}</mdui-card>`;
+          out.querySelectorAll("[data-copy]").forEach((b) => b.addEventListener("click", () => copyText(b.getAttribute("data-copy"))));
+        }
+        if (panel) panel.hidden = true;
+        window.toast("上傳完成");
+      } else {
+        window.toast("上傳完成");
+        window.location.reload();
+      }
     } catch (err) {
       window.toast("合併失敗：" + err.message);
       if (btn) btn.loading = false;
@@ -154,32 +267,7 @@
       btn.addEventListener("click", () => copyText(btn.getAttribute("data-copy")));
     });
 
-    // 公開上傳（單次 POST，後端串流寫入）
-    document.querySelectorAll("form[data-ajax-upload]").forEach((form) => {
-      form.addEventListener("submit", async (ev) => {
-        ev.preventDefault();
-        const out = form.parentElement.querySelector("[data-upload-result]");
-        const btn = form.querySelector("[type=submit]");
-        if (btn) btn.loading = true;
-        try {
-          const res = await fetch(form.action, { method: "POST", body: new FormData(form) });
-          const data = await res.json();
-          if (!res.ok) throw new Error(data.detail || ("HTTP " + res.status));
-          const links = [data.download_url || data.url, data.folder_url || data.share_url]
-            .filter(Boolean).map((u) => `<div><a href="${u}"><code>${u}</code></a>
-              <mdui-button variant="text" data-copy="${u}">複製</mdui-button></div>`).join("");
-          if (out) {
-            out.innerHTML = `<mdui-card variant="filled" class="card-pad result-box">
-              <div><strong>已上傳：</strong> ${data.filename} (${data.size_bytes} 位元組)</div>${links}</mdui-card>`;
-            out.querySelectorAll("[data-copy]").forEach((b) => b.addEventListener("click", () => copyText(b.getAttribute("data-copy"))));
-          }
-          window.toast("上傳完成");
-        } catch (err) { window.toast("上傳失敗：" + err.message); }
-        finally { if (btn) btn.loading = false; }
-      });
-    });
-
-    // 私人 16 線程分段上傳
+    // 16 線程分段上傳（公開 + 私人共用，data-merge 指向各自合併端點）
     document.querySelectorAll("form[data-chunked]").forEach((form) => {
       form.addEventListener("submit", (ev) => { ev.preventDefault(); chunkedUpload(form); });
     });

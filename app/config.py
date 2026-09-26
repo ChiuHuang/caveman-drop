@@ -79,6 +79,27 @@ class Settings:
     rate_limit_max_uploads: int = field(
         default_factory=lambda: _int("RATE_LIMIT_MAX_UPLOADS", 30)
     )
+    # Bandwidth policy (sliding 60s windows; see storage.bw_status):
+    # soft per-IP bytes/min and folder touches/min trigger throttling,
+    # hard caps are absolute. Throttled clients get 90 Mbps pacing and
+    # are told to lock to a single linear thread.
+    bw_ip_soft_bytes: int = field(
+        default_factory=lambda: _int("BW_IP_SOFT_MB", 100) * 1024**2
+    )
+    bw_ip_hard_bytes: int = field(
+        default_factory=lambda: _int("BW_IP_HARD_GB", 1) * 1024**3
+    )
+    bw_folder_hard_bytes: int = field(
+        default_factory=lambda: _int("BW_FOLDER_HARD_GB", 5) * 1024**3
+    )
+    bw_folders_per_min: int = field(
+        default_factory=lambda: _int("BW_FOLDERS_PER_MIN", 10)
+    )
+    throttle_mbps: int = field(default_factory=lambda: _int("THROTTLE_MBPS", 90))
+
+    @property
+    def throttle_bps(self) -> float:
+        return self.throttle_mbps * 1_000_000 / 8
 
     def __post_init__(self) -> None:
         # SERVER_PORT overrides PORT when set (legacy env name).

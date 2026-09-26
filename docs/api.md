@@ -14,6 +14,15 @@ id）。回傳 `folder_id`、`file_id`、`filename`、`size_bytes`、
 `content_type`、`url`、`download_url`、`folder_url`、`share_url`、
 `folder_api_url`、`file_api_url`。
 
+### `POST /api/public/chunk` → `POST /api/public/merge_chunks`
+
+人人可用的 16 線程分段上傳。先以最多 16 並行上傳 4 MB 分塊
+（multipart：`file_chunk`、`upload_id`（uuid）、`index`（從 0 開始）、
+`filename`），再 POST JSON（`upload_id`、`filename`、`total_chunks`、
+選填 `folder`）合併，回傳與單次上傳相同的完整 payload。
+每個分塊回應都帶頻寬判決：正常 `threads: 16`；超標則 `threads: 1` +
+`throttle_mbps`，前端必須鎖定單線程。計費（速率限制）只在合併時扣一次。
+
 ### `POST /api/public/folder`
 
 建立空資料夾。回傳 `folder_id`、`folder_url`、`upload_url`、

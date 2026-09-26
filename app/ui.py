@@ -104,6 +104,27 @@ def toast(msg: str) -> str:
     return f"<script>window.addEventListener('load',()=>window.toast({msg!r}));</script>"
 
 
+def thread_panel() -> str:
+    """IDM-style upload monitor: overall bar + segment map + 16 thread rows."""
+    return """<div class="tp" data-tp hidden>
+      <div class="tp-top">
+        <strong data-tp-pct>0%</strong>
+        <span data-tp-speed class="muted"></span>
+        <span data-tp-note class="tp-note"></span>
+      </div>
+      <mdui-linear-progress data-tp-bar></mdui-linear-progress>
+      <div class="tp-seglabel muted">分段：<span data-tp-segcount></span></div>
+      <div class="segbar" data-tp-segs></div>
+      <table class="tptable">
+        <thead><tr><th>No</th><th>狀態</th></tr></thead>
+        <tbody data-tp-rows></tbody>
+      </table>
+      <div class="form-row">
+        <mdui-button variant="outlined" data-tp-pause>暫停</mdui-button>
+      </div>
+    </div>"""
+
+
 def endpoint_card(method: str, path: str, desc: str, href: str | None = None) -> str:
     link = (
         f'<a href="{html.escape(href)}"><mdui-button variant="text">開啟頁面</mdui-button></a>'
@@ -170,17 +191,33 @@ def private_panel(files: list[dict], base: str) -> str:
     return f"""
         <mdui-card variant="outlined" class="card-pad">
           <h2>上傳檔案（16 線程分段上傳）</h2>
-          <p class="muted">大檔案會自動切成 4 MB 分塊，以 16 條並行上傳，斷線重整後可直接重傳。</p>
-          <form action="/api/upload_chunk" method="post" data-chunked>
+          <p class="muted">大檔案會自動切成 4 MB 分塊，以 16 條並行上傳，可暫停，可看每條線程即時狀態。</p>
+          <form action="/api/upload_chunk" method="post" data-chunked data-merge="/api/merge_chunks">
             <div class="form-row">
               <input type="file" name="file" required>
               <mdui-button type="submit">開始上傳</mdui-button>
             </div>
-            <mdui-linear-progress data-progress style="display:none"></mdui-linear-progress>
-            <p class="muted" data-progress-text></p>
+            {thread_panel()}
           </form>
         </mdui-card>
         <mdui-card variant="outlined" class="card-pad">
           <h2>私人檔案（{len(files)}）</h2>
           {private_file_rows(files, base)}
         </mdui-card>"""
+
+
+def public_upload_form(folder_id: str | None = None) -> str:
+    """Public 16-thread chunked upload form (+ thread monitor) for everyone."""
+    hidden = f'<input type="hidden" name="folder" value="{html.escape(folder_id)}">' if folder_id else ""
+    folder_field = "" if folder_id else '<mdui-text-field name="folder" label="資料夾 ID（選填，空白會建立新資料夾）"></mdui-text-field>'
+    return f"""
+            <form action="/api/public/chunk" method="post" data-chunked data-merge="/api/public/merge_chunks" data-public="1">
+              {hidden}
+              <div class="form-row">
+                <input type="file" name="file" required>
+                {folder_field}
+                <mdui-button type="submit">上傳</mdui-button>
+              </div>
+              {thread_panel()}
+            </form>
+            <div data-upload-result></div>"""

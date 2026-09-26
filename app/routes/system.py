@@ -45,6 +45,12 @@ def _api_payload(request: Request) -> dict:
                 },
                 "example_curl": f'curl -F "file=@myfile.txt" {base}/api/public/upload',
             },
+            "upload_chunked": {
+                "method": "POST",
+                "chunk_url": f"{base}/api/public/chunk",
+                "merge_url": f"{base}/api/public/merge_chunks",
+                "notes": "16-thread public upload for everyone. POST 4 MB parts (multipart: file_chunk, upload_id, index, filename), then POST JSON {upload_id, filename, total_chunks, folder?} to merge. Chunk responses carry the bandwidth verdict (threads 16, or 1 + throttle_mbps when throttled).",
+            },
             "list_folder": {
                 "method": "GET",
                 "url": f"{base}/api/public/folder/{{folder_id}}",
@@ -93,6 +99,7 @@ async def api_root(request: Request):
         <div class="stack">
         """
                 + endpoint_card("POST", "/api/public/upload", "匿名上傳 — multipart 欄位 'file'，選填 'folder'。", "/upload")
+                + endpoint_card("POST", "/api/public/chunk → /api/public/merge_chunks", "人人可用的 16 線程分段上傳：先傳 4 MB 分塊再合併。", "/upload")
                 + endpoint_card("POST", "/api/public/folder", "建立空資料夾，回傳分享與上傳網址。", "/upload")
                 + endpoint_card("GET", "/api/public/folder/{folder_id}", "資料夾資訊、檔案清單與下載網址。", None)
                 + endpoint_card("GET", "/api/public/file/{folder_id}/{file_id}", "單一檔案資訊與下載網址。", None)
@@ -123,6 +130,15 @@ Returns JSON containing `url`, `download_url`, `folder_url`, `folder_api_url`, a
 POST {base}/api/public/folder
 Returns a folder_id plus `folder_url`, `upload_url`, and `folder_api_url`.
 
+## 16-thread upload (everyone, browsers + scripts)
+POST {base}/api/public/chunk (multipart: `file_chunk`, `upload_id` (uuid),
+`index` (0-based), `filename`) — send up to 16 parts in parallel, 4 MB each.
+POST {base}/api/public/merge_chunks (JSON: `upload_id`, `filename`,
+`total_chunks`, optional `folder`) — assembles and returns the same payload
+as the single-POST upload. Each chunk response includes the bandwidth
+verdict: `threads` 16 normally, or 1 with `throttle_mbps` when throttled
+(lock to a single linear thread).
+
 ## List a folder
 GET {base}/api/public/folder/{{folder_id}}
 Returns files and direct download URLs.
@@ -146,6 +162,9 @@ GET {base}/api (JSON index)
 - Maximum single file: {max_gb} GB.
 - If a folder contains more than one file, combined folder size is limited to {folder_gb} GB.
 - Upload rate limit: {rate} attempts per IP per {window_min} minutes.
+- Bandwidth (sliding 60 s windows): 1 GB/min per IP, 5 GB/min per folder.
+  Over 100 MB/min per IP or 10 folders/min per IP throttles that IP to
+  90 Mbps and locks it to a single linear thread.
 
 AI agents should prefer the JSON API endpoints above and use the returned `url` or `download_url` directly.
 """

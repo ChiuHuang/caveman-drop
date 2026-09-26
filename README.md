@@ -62,6 +62,10 @@ docs/                # /docs 的 Markdown 來源（GitHub 上也可直接閱讀�
 | `MAX_FILE_SIZE_GB` | `5` | 單檔上限 |
 | `MAX_MULTI_FOLDER_TOTAL_GB` | `1` | 資料夾超過 1 個檔案後的合計上限 |
 | `RATE_LIMIT_MAX_UPLOADS` / `RATE_LIMIT_WINDOW_SECONDS` | `30` / `3600` | 單 IP 上傳頻率限制 |
+| `BW_IP_SOFT_MB` | `100` | 單 IP 每分鐘流量軟上限，超過限速 |
+| `BW_IP_HARD_GB` / `BW_FOLDER_HARD_GB` | `1` / `5` | 每分鐘硬上限（IP / 資料夾） |
+| `BW_FOLDERS_PER_MIN` | `10` | 單 IP 每分鐘觸及資料夾數上限 |
+| `THROTTLE_MBPS` | `90` | 被限速時的速度 + 鎖單線程 |
 
 ## 文件
 
