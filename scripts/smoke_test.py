@@ -181,4 +181,26 @@ n = assemble_chunks(f"{tmp}/parts", f"{tmp}/out", 1, None)
 assert n == 10
 print("private uncapped assemble OK")
 
+# --- tmp sweeper: stale chunk dirs removed, fresh kept ---
+import time
+from app.config import settings as _settings
+from app.storage import sweep_tmp
+old_age = _settings.tmp_max_age_hours
+_settings.tmp_max_age_hours = 24
+stale = os.path.join(_settings.tmp_dir, "sweep_test_stale")
+fresh = os.path.join(_settings.tmp_dir, "sweep_test_fresh")
+os.makedirs(stale, exist_ok=True)
+os.makedirs(fresh, exist_ok=True)
+open(os.path.join(stale, "part_0"), "wb").write(b"x")
+open(os.path.join(fresh, "part_0"), "wb").write(b"x")
+past = time.time() - 2 * 86400
+os.utime(os.path.join(stale, "part_0"), (past, past))
+os.utime(stale, (past, past))
+assert sweep_tmp() >= 1
+assert not os.path.exists(stale) and os.path.exists(fresh)
+import shutil
+shutil.rmtree(fresh, ignore_errors=True)
+_settings.tmp_max_age_hours = old_age
+print("tmp sweep OK")
+
 print("ALL_SMOKE_OK")

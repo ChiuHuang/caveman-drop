@@ -333,3 +333,38 @@ def stream_download(
 
 def folder_lock(folder_id: str) -> asyncio.Lock:
     return _public_folder_locks[folder_id]
+
+
+def sweep_tmp() -> int:
+    """Delete abandoned chunk dirs whose newest content is older than the TTL."""
+    import shutil
+
+    ttl = settings.tmp_max_age_hours * 3600
+    now = time.time()
+    removed = 0
+    try:
+        entries = list(os.scandir(settings.tmp_dir))
+    except OSError:
+        return 0
+    for entry in entries:
+        try:
+            latest = entry.stat().st_mtime
+            if entry.is_dir(follow_symlinks=False):
+                for root, _, files in os.walk(entry.path):
+                    for fn in files:
+                        try:
+                            mt = os.path.getmtime(os.path.join(root, fn))
+                            if mt > latest:
+                                latest = mt
+                        except OSError:
+                            pass
+            if now - latest < ttl:
+                continue
+            if entry.is_dir(follow_symlinks=False):
+                shutil.rmtree(entry.path, ignore_errors=True)
+            else:
+                os.remove(entry.path)
+            removed += 1
+        except OSError:
+            continue
+    return removed

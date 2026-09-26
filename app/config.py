@@ -71,6 +71,7 @@ class Settings:
         default_factory=lambda: _int("MAX_FILE_SIZE_GB", 5) * 1024**3
     )
     max_chunked_parts: int = field(default_factory=lambda: _int("MAX_CHUNKED_PARTS", 16384))
+    tmp_max_age_hours: int = field(default_factory=lambda: _int("TMP_MAX_AGE_HOURS", 24))
     rate_limit_window: int = field(
         default_factory=lambda: _int("RATE_LIMIT_WINDOW_SECONDS", 3600)
     )

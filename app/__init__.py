@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,20 +12,33 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
+from . import storage
 from .config import settings
 from .negotiation import wants_html
 from .routes import docs, pages, private_api, public_api, system
 from .ui import page
 
 
+async def _tmp_sweeper() -> None:
+    while True:
+        await asyncio.sleep(3600)
+        storage.sweep_tmp()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    storage.sweep_tmp()
+    task = asyncio.create_task(_tmp_sweeper())
+    try:
+        yield
+    finally:
+        task.cancel()
+
+
 def create_app() -> FastAPI:
-    # docs_url is moved aside: our GitBook-style guides live at /docs.
-    app = FastAPI(title="CaveMan Drop", version="2.0.0", docs_url="/swagger", redoc_url=None)
+    app = FastAPI(title="CaveMan Drop", version="2.0.0", docs_url="/swagger", redoc_url=None, lifespan=lifespan)
     app.add_middleware(SessionMiddleware, secret_key=settings.secret_key)
 
-    # CORS is open so the public upload/download API can be called from any
-    # origin. allow_credentials is False because credentialed requests can't
-    # combine with a wildcard origin; the private dashboard is same-origin.
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
