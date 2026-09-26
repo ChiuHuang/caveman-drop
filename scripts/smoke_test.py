@@ -1,4 +1,5 @@
 """Smoke test: browser HTML vs agent text/JSON, upload flows, private mode."""
+import os
 import uuid
 
 from fastapi.testclient import TestClient
@@ -30,6 +31,7 @@ print("llms OK")
 
 r = c.get("/upload", headers=B)
 assert "data-chunked" in r.text and "data-tp-segs" in r.text
+assert "先說好" in r.text
 print("browser /upload OK (thread panel present)")
 
 r = c.get("/docs", headers=B)
@@ -151,5 +153,22 @@ print("range download OK")
 v = c.get(f"/view/{priv_id}", headers=J)
 assert v.status_code == 200
 print("preview view OK")
+
+# --- private merge uncapped: tiny cap rejects, None assembles ---
+import tempfile
+from fastapi import HTTPException
+from app.storage import assemble_chunks
+tmp = tempfile.mkdtemp()
+os.makedirs(f"{tmp}/parts", exist_ok=True)
+open(f"{tmp}/parts/part_0", "wb").write(b"0123456789")
+try:
+    assemble_chunks(f"{tmp}/parts", f"{tmp}/out", 1, 5)
+    raise SystemExit("cap should have rejected")
+except HTTPException as e:
+    assert e.status_code == 413
+open(f"{tmp}/parts/part_0", "wb").write(b"0123456789")
+n = assemble_chunks(f"{tmp}/parts", f"{tmp}/out", 1, None)
+assert n == 10
+print("private uncapped assemble OK")
 
 print("ALL_SMOKE_OK")

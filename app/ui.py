@@ -103,6 +103,18 @@ def toast(msg: str) -> str:
     return f"<script>window.addEventListener('load',()=>window.toast({msg!r}));</script>"
 
 
+def limits_note() -> str:
+    from .config import settings
+
+    return (
+        '<p class="muted limits-first">先說好：'
+        f"單檔上限 {settings.max_file_size // 1024**3} GB（公開）・"
+        f"資料夾每 {settings.bw_window_seconds // 60} 分鐘合計上限 "
+        f"{settings.bw_folder_hard_bytes // 1024**3} GB（算流量不算庫存）・"
+        "超量自動降速・登入不限</p>"
+    )
+
+
 def thread_panel() -> str:
     """IDM-style upload monitor: overall bar + segment map + 16 thread rows."""
     return """<div class="tp" data-tp hidden>
@@ -204,10 +216,11 @@ def private_panel(files: list[dict], base: str) -> str:
 
 
 def public_upload_form(folder_id: str | None = None) -> str:
-    """Public 16-thread chunked upload form (+ thread monitor) for everyone."""
+    """Public chunked upload form (+ thread monitor) for everyone."""
     hidden = f'<input type="hidden" name="folder" value="{html.escape(folder_id)}">' if folder_id else ""
     folder_field = "" if folder_id else '<mdui-text-field name="folder" label="資料夾 ID（選填，空白會建立新資料夾）"></mdui-text-field>'
     return f"""
+            {limits_note()}
             <form action="/api/public/chunk" method="post" data-chunked data-merge="/api/public/merge_chunks" data-public="1">
               {hidden}
               <div class="form-row">

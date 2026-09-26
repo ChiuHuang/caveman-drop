@@ -159,8 +159,8 @@ def chunk_dir(prefix: str, upload_id: str) -> str:
     return d
 
 
-def assemble_chunks(chunk_dirname: str, dest: str, total_chunks: int, max_bytes: int) -> int:
-    """Concatenate part_0..N into dest, then clean up."""
+def assemble_chunks(chunk_dirname: str, dest: str, total_chunks: int, max_bytes: int | None) -> int:
+    """Concatenate part_0..N into dest, then clean up. None = no size cap."""
     if not 1 <= total_chunks <= MAX_CHUNKED_PARTS:
         raise HTTPException(400, f"total_chunks must be 1..{MAX_CHUNKED_PARTS}")
     written = 0
@@ -176,7 +176,7 @@ def assemble_chunks(chunk_dirname: str, dest: str, total_chunks: int, max_bytes:
                         if not c:
                             break
                         written += len(c)
-                        if written > max_bytes:
+                        if max_bytes is not None and written > max_bytes:
                             raise HTTPException(413, "File exceeds the size limit")
                         out.write(c)
     except HTTPException:

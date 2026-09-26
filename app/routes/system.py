@@ -19,11 +19,10 @@ def _api_payload(request: Request) -> dict:
         "description": "Anonymous file sharing. Upload a file, get a permanent share link back. No auth required.",
         "limits": {
             "max_file_size_bytes": settings.max_file_size,
-            "max_file_size_human": f"{settings.max_file_size // 1024**3} GB",
-            "max_multi_file_folder_total_bytes": settings.max_multi_folder_total,
-            "max_multi_file_folder_total_human": (
-                f"{settings.max_multi_folder_total // 1024**3} GB combined, "
-                "once a folder holds more than one file"
+            "max_file_size_human": f"{settings.max_file_size // 1024**3} GB (public uploads; private uncapped)",
+            "folder_window_cap_human": (
+                f"{settings.bw_folder_hard_bytes // 1024**3} GB per "
+                f"{settings.bw_window_seconds // 60} min per folder (bandwidth window, not storage total)"
             ),
             "rate_limit": (
                 f"{settings.rate_limit_max_uploads} uploads / IP / "
@@ -157,8 +156,9 @@ GET {base}/docs (HTML for browsers, Markdown for agents via ?format=text)
 GET {base}/api (JSON index)
 
 ## Limits
-- Maximum single file: {max_gb} GB.
-- If a folder contains more than one file, combined folder size is limited to {folder_gb} GB.
+- Maximum single public file: {max_gb} GB (private uploads uncapped).
+- Folders are capped per {bw_window}-minute bandwidth window
+  ({folder_gb} GB), not by stored total.
 - Upload rate limit: {rate} attempts per IP per {window_min} minutes.
 - Fair use: heavy uploaders are transparently slowed down; logged-in
   sessions are exempt.
@@ -174,7 +174,8 @@ async def public_llms(request: Request):
     return LLMS_TEMPLATE.format(
         base=base,
         max_gb=settings.max_file_size // 1024**3,
-        folder_gb=settings.max_multi_folder_total // 1024**3,
+        bw_window=settings.bw_window_seconds // 60,
+        folder_gb=settings.bw_folder_hard_bytes // 1024**3,
         rate=settings.rate_limit_max_uploads,
         window_min=settings.rate_limit_window // 60,
     )

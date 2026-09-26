@@ -61,8 +61,7 @@ docs/                # /docs 的 Markdown 來源（GitHub 上也可直接閱讀�
 | `PASSWORD` | `passw` | 私人後台密碼——**務必修改** |
 | `SECRET_KEY` | 自動產生 | Session 簽名（存於 `.secret_key`） |
 | `UPLOAD_DIR` / `TMP_DIR` / `PUBLIC_DIR` | `airdrop_files` / `airdrop_tmp` / `public_uploads` | 儲存目錄 |
-| `MAX_FILE_SIZE_GB` | `5` | 單檔上限 |
-| `MAX_MULTI_FOLDER_TOTAL_GB` | `1` | 資料夾超過 1 個檔案後的合計上限 |
+| `MAX_FILE_SIZE_GB` | `5` | 公開單檔上限（登入後無上限） |
 | `RATE_LIMIT_MAX_UPLOADS` / `RATE_LIMIT_WINDOW_SECONDS` | `30` / `3600` | 單 IP 上傳頻率限制 |
 | `BW_WINDOW_SECONDS` | `600` | 頻寬統計視窗（秒），到期重算 |
 | `BW_IP_SOFT_MB` | `100` | 單 IP 每視窗流量，超過開始限速 |

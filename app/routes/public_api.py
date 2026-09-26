@@ -72,23 +72,13 @@ async def public_upload(
         os.makedirs(fdir, exist_ok=True)
 
     async with folder_lock(folder_id):
-        existing_files = public_folder_files(folder_id)
-        becomes_multi = len(existing_files) >= 1
-        existing_total = sum(f["size"] for f in existing_files)
         known_size = getattr(file, "size", None)
 
-        if known_size is not None:
-            if known_size > settings.max_file_size:
-                raise HTTPException(
-                    413,
-                    f"File exceeds the {settings.max_file_size // 1024**3}GB per-file limit",
-                )
-            if becomes_multi and existing_total + known_size > settings.max_multi_folder_total:
-                raise HTTPException(
-                    413,
-                    f"This folder can hold at most {settings.max_multi_folder_total // 1024**3}GB "
-                    "once it contains more than one file",
-                )
+        if known_size is not None and known_size > settings.max_file_size:
+            raise HTTPException(
+                413,
+                f"File exceeds the {settings.max_file_size // 1024**3}GB per-file limit",
+            )
 
         import uuid
 
@@ -112,12 +102,6 @@ async def public_upload(
                         raise HTTPException(
                             413,
                             f"File exceeds the {settings.max_file_size // 1024**3}GB per-file limit",
-                        )
-                    if becomes_multi and existing_total + written > settings.max_multi_folder_total:
-                        raise HTTPException(
-                            413,
-                            f"This folder can hold at most {settings.max_multi_folder_total // 1024**3}GB "
-                            "once it contains more than one file",
                         )
                     out.write(chunk)
                     bw_record(ip, folder_id, len(chunk))
@@ -230,10 +214,6 @@ async def public_merge_chunks(request: Request, payload: PublicMergePayload):
         os.makedirs(fdir, exist_ok=True)
 
     async with folder_lock(folder_id):
-        existing_files = public_folder_files(folder_id)
-        becomes_multi = len(existing_files) >= 1
-        existing_total = sum(f["size"] for f in existing_files)
-
         import uuid
 
         fid = str(uuid.uuid4())
@@ -245,9 +225,6 @@ async def public_merge_chunks(request: Request, payload: PublicMergePayload):
         written = assemble_chunks(cdir, dest, payload.total_chunks, settings.max_file_size)
         if written > settings.max_file_size:
             raise HTTPException(413, "File exceeds the per-file limit")
-        if becomes_multi and existing_total + written > settings.max_multi_folder_total:
-            os.remove(dest)
-            raise HTTPException(413, "This folder is over its combined size limit")
 
         content_type = mimetypes.guess_type(original_name)[0] or "application/octet-stream"
         with open(os.path.join(fdir, fid + ".json"), "w", encoding="utf-8") as f:

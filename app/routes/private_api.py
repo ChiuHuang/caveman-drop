@@ -112,7 +112,7 @@ async def merge_chunks(request: Request, payload: MergePayload):
     _, ext = os.path.splitext(payload.filename)
     final_path = os.path.join(settings.upload_dir, fid + ext)
     cdir = os.path.join(settings.tmp_dir, f"priv_{payload.upload_id}")
-    assemble_chunks(cdir, final_path, payload.total_chunks, settings.max_file_size)
+    assemble_chunks(cdir, final_path, payload.total_chunks, None)
     with open(os.path.join(settings.upload_dir, fid + ".json"), "w", encoding="utf-8") as f:
         json.dump({"filename": payload.filename, "ext": ext}, f)
     return {"success": True, "file_id": fid}

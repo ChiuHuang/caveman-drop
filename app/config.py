@@ -70,9 +70,6 @@ class Settings:
     max_file_size: int = field(
         default_factory=lambda: _int("MAX_FILE_SIZE_GB", 5) * 1024**3
     )
-    max_multi_folder_total: int = field(
-        default_factory=lambda: _int("MAX_MULTI_FOLDER_TOTAL_GB", 1) * 1024**3
-    )
     rate_limit_window: int = field(
         default_factory=lambda: _int("RATE_LIMIT_WINDOW_SECONDS", 3600)
     )
