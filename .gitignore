@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+.secret_key
+mobile_token.txt
+airdrop_files/
+airdrop_tmp/
+public_uploads/
+mobile_token.txt
+*.log

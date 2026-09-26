@@ -1,0 +1,18 @@
+[project]
+name = "caveman-drop"
+version = "2.0.0"
+description = "CaveMan Drop — text-first public file sharing with MDUI browser UI and GitBook-style docs"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "python-dotenv>=1.0",
+  "python-multipart>=0.0.18",
+  "itsdangerous>=2.1",
+  "markdown>=3.6",
+  "httpx>=0.27",
+]
+
+[tool.uv]
+package = false
