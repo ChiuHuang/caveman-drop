@@ -215,7 +215,7 @@ def private_panel(files: list[dict], base: str) -> str:
         <mdui-card variant="outlined" class="card-pad">
           <h2>上傳檔案</h2>
           <p class="muted">大檔案會自動分段上傳，可暫停，並即時顯示上傳進度。登入狀態不受頻寬限速影響。</p>
-          <form action="/api/upload_chunk" method="post" data-chunked data-merge="/api/merge_chunks">
+          <form action="/api/upload_chunk" method="post" data-chunked data-merge="/api/merge_chunks" data-probe="/api/probe">
             <div class="form-row">
               <input type="file" name="file" required>
               <mdui-button type="submit">開始上傳</mdui-button>
@@ -236,7 +236,7 @@ def public_upload_form(folder_id: str | None = None) -> str:
     folder_field = "" if folder_id else '<mdui-text-field name="folder" label="資料夾 ID（選填，空白會建立新資料夾）"></mdui-text-field>'
     return f"""
             {limits_note()}
-            <form action="/api/public/chunk" method="post" data-chunked data-merge="/api/public/merge_chunks" data-public="1">
+            <form action="/api/public/chunk" method="post" data-chunked data-merge="/api/public/merge_chunks" data-public="1" data-probe="/api/public/probe">
               {hidden}
               <div class="form-row">
                 <input type="file" name="file" required>

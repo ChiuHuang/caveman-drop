@@ -134,7 +134,8 @@ POST {base}/api/public/chunk (multipart: `file_chunk`, `upload_id` (uuid),
 `index` (0-based), `filename`) — send parts in parallel, then
 POST {base}/api/public/merge_chunks (JSON: `upload_id`, `filename`,
 `total_chunks`, optional `folder`) to assemble. Returns the same payload
-as the single-POST upload.
+as the single-POST upload. POST 1 MB to /api/public/probe first for a
+speed-based thread recommendation (slow links get 32/64/128).
 
 ## List a folder
 GET {base}/api/public/folder/{{folder_id}}

@@ -30,9 +30,13 @@ from ..storage import (
     chunk_dir,
     client_ip,
     folder_lock,
+    probe_check,
     public_folder_dir,
     public_folder_files,
     stream_download,
+    tag_ip,
+    tagged_threads,
+    threads_for_speed,
     validate_public_id,
     validate_upload_id,
 )
@@ -190,6 +194,7 @@ async def public_chunk(
     bw_record(ip, None, len(data))
     status = bw_status(ip)
     await bw_pace(ip, len(data), status["throttle_mbps"])
+    status["threads_tagged"] = tagged_threads(ip)
     return {"ok": True, **status}
 
 
@@ -256,6 +261,23 @@ async def public_merge_chunks(request: Request, payload: PublicMergePayload):
         "folder_api_url": f"{base}/api/public/folder/{folder_id}",
         "file_api_url": f"{base}/api/public/file/{folder_id}/{fid}",
     }
+
+
+@router.post("/api/public/probe")
+async def public_probe(request: Request, probe: UploadFile = File(...)):
+    """1MB speed probe: returns the thread count this IP should use."""
+    import time as _time
+
+    ip = client_ip(request)
+    probe_check(ip)
+    data = await probe.read()
+    await probe.close()
+    if len(data) > 2 * 1024 * 1024:
+        raise HTTPException(413, "Probe too large")
+    elapsed = max(_time.time() - getattr(request.state, "t0", _time.time()), 0.001)
+    threads = threads_for_speed(len(data) / elapsed)
+    tag_ip(ip, threads)
+    return {"threads": threads, "you": ip}
 
 
 @router.get("/api/public/file/{folder_id}/{file_id}")

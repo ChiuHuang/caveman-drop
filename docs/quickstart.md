@@ -55,6 +55,9 @@ for i in range(total):
 r = httpx.post(f"{BASE}/api/public/merge_chunks",
                json={"upload_id": uid, "filename": "big.bin", "total_chunks": total})
 print(r.json()["download_url"])
+
+上傳前可先 POST 1MB 到 `/api/public/probe` 測速，回傳適合的並行數
+（慢連線會自動加到 32 / 64 / 128），瀏覽器會自動做這件事。
 ```
 
 ## 私人模式

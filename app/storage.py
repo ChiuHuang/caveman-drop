@@ -335,8 +335,46 @@ def folder_lock(folder_id: str) -> asyncio.Lock:
     return _public_folder_locks[folder_id]
 
 
+_ip_tags: dict[str, tuple[int, float]] = {}
+_probe_log: dict[str, deque] = defaultdict(deque)
+
+
+def threads_for_speed(bps: float) -> int:
+    MB = 1024 * 1024
+    if bps > 10 * MB:
+        return 16
+    if bps > 5 * MB:
+        return 32
+    if bps > 2 * MB:
+        return 64
+    return 128
+
+
+def probe_check(ip: str) -> None:
+    dq = _probe_log[ip]
+    now = time.time()
+    _prune(dq, now)
+    if len(dq) >= 20:
+        raise HTTPException(429, "Too many probes")
+    dq.append((now, 0))
+
+
+def tag_ip(ip: str, threads: int) -> None:
+    _ip_tags[ip] = (threads, time.time())
+
+
+def tagged_threads(ip: str) -> int | None:
+    tag = _ip_tags.get(ip)
+    if not tag:
+        return None
+    threads, ts = tag
+    if time.time() - ts > _bw_window():
+        _ip_tags.pop(ip, None)
+        return None
+    return threads
+
+
 def sweep_tmp() -> int:
-    """Delete abandoned chunk dirs whose newest content is older than the TTL."""
     import shutil
 
     ttl = settings.tmp_max_age_hours * 3600

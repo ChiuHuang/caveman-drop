@@ -24,7 +24,11 @@ from ..storage import (
     chunk_dir,
     client_ip,
     private_files,
+    probe_check,
     stream_download,
+    tag_ip,
+    tagged_threads,
+    threads_for_speed,
     validate_upload_id,
 )
 from ..ui import page, private_panel
@@ -72,6 +76,24 @@ async def mobile_post(request: Request, token: str, file: Optional[UploadFile] =
     return PlainTextResponse(f"Uploaded: {file.filename}\nFile ID: {fid}")
 
 
+@router.post("/api/probe")
+async def private_probe(request: Request, probe: UploadFile = File(...)):
+    """1MB speed probe for the private uploader."""
+    import time as _time
+
+    _check_private(request)
+    ip = client_ip(request)
+    probe_check(ip)
+    data = await probe.read()
+    await probe.close()
+    if len(data) > 2 * 1024 * 1024:
+        raise HTTPException(413, "Probe too large")
+    elapsed = max(_time.time() - getattr(request.state, "t0", _time.time()), 0.001)
+    threads = threads_for_speed(len(data) / elapsed)
+    tag_ip(ip, threads)
+    return {"threads": threads, "you": ip}
+
+
 @router.post("/api/upload_chunk")
 async def upload_chunk(
     request: Request,
@@ -101,6 +123,7 @@ async def upload_chunk(
     bw_record(ip, None, len(data))
     status = bw_status(ip)
     await bw_pace(ip, len(data), status["throttle_mbps"])
+    status["threads_tagged"] = tagged_threads(ip)
     return {"ok": True, **status}
 
 

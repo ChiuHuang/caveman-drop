@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -35,8 +36,14 @@ async def lifespan(app: FastAPI):
         task.cancel()
 
 
+async def _timing(request: Request, call_next):
+    request.state.t0 = time.time()
+    return await call_next(request)
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="CaveMan Drop", version="2.0.0", docs_url="/swagger", redoc_url=None, lifespan=lifespan)
+    app.middleware("http")(_timing)
     app.add_middleware(SessionMiddleware, secret_key=settings.secret_key)
 
     app.add_middleware(

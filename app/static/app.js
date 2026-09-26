@@ -52,19 +52,34 @@
 
     const total = Math.max(1, Math.ceil(file.size / CHUNK));
     const uploadId = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()));
+    // 慢連線加線程：先打 1MB 探針，伺服器按真實 IP 記檔位
+    let threads = Math.min(THREADS, total);
+    const probeUrl = form.getAttribute("data-probe");
+    if (probeUrl && total > 4) {
+      try {
+        const pfd = new FormData();
+        pfd.append("probe", new Blob([new Uint8Array(1024 * 1024)]), "probe.bin");
+        const pr = await fetch(probeUrl, { method: "POST", body: pfd });
+        if (pr.ok) {
+          const pj = await pr.json();
+          if (pj.threads) threads = Math.max(1, Math.min(128, pj.threads | 0, total));
+        }
+      } catch { /* 探針失敗就用預設 */ }
+    }
     const state = {
       next: 0, done: 0, doneBytes: 0, failed: null,
-      paused: false, cancelled: false, threads: Math.min(THREADS, total),
+      paused: false, cancelled: false, threads,
     };
 
     if (btn) btn.loading = true;
     if (panel) panel.hidden = false;
 
-    // 線程表：16 列 No / 狀態
+    // 線程表：最多顯示 16 列，人多時輪流顯示
+    const shown = Math.min(state.threads, 16);
     const rowEls = [];
     if (rowsBox) {
       rowsBox.innerHTML = "";
-      for (let t = 0; t < state.threads; t++) {
+      for (let t = 0; t < shown; t++) {
         const tr = document.createElement("tr");
         tr.innerHTML = `<td>${t + 1}</td><td class="st idle">待命中</td>`;
         rowsBox.appendChild(tr);
@@ -84,11 +99,12 @@
         cellEls.push(s);
       }
     }
-    if (segCount) segCount.textContent = `${total} 塊 / ${NCELL} 格`;
+    if (segCount) segCount.textContent = `${total} 塊 / ${NCELL} 格` + (state.threads > 16 ? ` · ${state.threads} 線程` : "");
     const setRow = (t, txt, cls) => {
-      if (!rowEls[t]) return;
-      rowEls[t].textContent = txt;
-      rowEls[t].className = "st " + cls;
+      const el = rowEls.length ? rowEls[t % rowEls.length] : null;
+      if (!el) return;
+      el.textContent = txt;
+      el.className = "st " + cls;
     };
     const render = () => {
       if (pct) pct.textContent = Math.floor((state.done / total) * 100) + "%";

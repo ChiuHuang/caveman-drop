@@ -113,6 +113,20 @@ import shutil
 shutil.rmtree(f"airdrop_tmp/pub_{big_uid}", ignore_errors=True)
 print("high chunk index OK")
 
+# --- 1MB probe tags the real IP with a thread count ---
+probe_body = b"p" * (1024 * 1024)
+pr = c.post("/api/public/probe", headers={**J, "CF-Connecting-IP": "5.6.7.8"},
+            files={"probe": ("probe.bin", probe_body)})
+assert pr.status_code == 200, pr.text
+assert pr.json()["you"] == "5.6.7.8" and pr.json()["threads"] == 16
+rr = c.post("/api/public/chunk", headers={**J, "CF-Connecting-IP": "5.6.7.8"},
+            files={"file_chunk": ("c", b"z")},
+            data={"upload_id": str(uuid.uuid4()), "index": "0", "filename": "t.bin"})
+assert rr.json()["threads_tagged"] == 16
+from app.storage import threads_for_speed
+assert threads_for_speed(1024 * 1024) == 128 and threads_for_speed(20 * 1024 * 1024) == 16
+print("probe + IP tag OK")
+
 # --- login -> private mode, public upload hidden ---
 # Push the test IP over budget first: private session must stay exempt.
 _st.bw_record("testclient", None, 200 * 1024 * 1024)
