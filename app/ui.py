@@ -209,7 +209,27 @@ def sort_bar() -> str:
     </div>"""
 
 
-def private_panel(files: list[dict], base: str, folders: dict) -> str:
+def share_file_rows(files: list[dict], token: str, base: str) -> str:
+    """Shared folder rows: preview + download + copy, no delete."""
+    if not files:
+        return '<mdui-card variant="filled" class="empty">這個資料夾還沒有檔案。</mdui-card>'
+    rows = []
+    for f in files:
+        dl = f"{base}/dl/sh/{token}/{f['id']}"
+        rows.append(
+            "<mdui-list-item>"
+            f'<mdui-icon slot="icon" name="description"></mdui-icon>'
+            f'<div><div class="fname">{html.escape(f["name"])}</div>'
+            f'<div class="fmeta">{fmt_size(f.get("bytes", 0))} · {fmt_time(f.get("ctime", 0))}</div></div>'
+            f'<mdui-button-icon slot="end-icon" icon="visibility" data-preview="{html.escape(dl)}?preview=1" data-name="{html.escape(f["name"])}" title="預覽"></mdui-button-icon>'
+            f'<mdui-button-icon slot="end-icon" icon="download" data-mt-download="{html.escape(dl)}" data-name="{html.escape(f["name"])}" data-size="{f.get("bytes", 0)}" title="下載"></mdui-button-icon>'
+            f'<mdui-button slot="end-icon" variant="text" data-copy="{html.escape(dl)}">複製連結</mdui-button>'
+            "</mdui-list-item>"
+        )
+    return f'<mdui-list class="file-list">{"".join(rows)}</mdui-list>'
+
+
+def private_panel(files: list[dict], base: str, folders: dict, shares: dict) -> str:
     """Private cloud: upload into folders, mkdir inline, grouped file cards."""
     uncat = [f for f in files if not f.get("folder")]
     opts = '<option value="">未分類</option>' + "".join(
@@ -224,11 +244,26 @@ def private_panel(files: list[dict], base: str, folders: dict) -> str:
         </mdui-card>"""]
     for fid, m in folders.items():
         mine = [f for f in files if f.get("folder") == fid]
+        srows = "".join(
+            f'<div class="rlink"><span class="rlink-label">{"僅檢視" if s.get("mode") == "view" else "可上傳"}</span>'
+            f"<code>{html.escape(base + '/s/' + t)}</code>"
+            '<span class="rlink-btns">'
+            f'<mdui-button variant="text" data-copy="{html.escape(base + "/s/" + t)}">複製</mdui-button>'
+            f'<mdui-button variant="text" data-unshare="{html.escape(t)}">取消</mdui-button>'
+            "</span></div>"
+            for t, s in shares.items()
+            if s.get("folder_id") == fid
+        )
         sections.append(f"""
         <mdui-card variant="outlined" class="card-pad">
           <h2>{html.escape(m.get("name", ""))}（{len(mine)}）</h2>
-          <div class="form-row">
-            <mdui-button variant="text" data-delete-dir="{html.escape(base + "/deldir/" + fid)}" data-name="{html.escape(m.get("name", ""))}" data-count="{len(mine)}">刪除資料夾</mdui-button>
+          <div class="sharebox">
+            {srows}
+            <div class="form-row">
+              <mdui-button variant="outlined" data-share-create="{html.escape(fid)}" data-mode="view">建立檢視連結</mdui-button>
+              <mdui-button variant="outlined" data-share-create="{html.escape(fid)}" data-mode="upload">建立上傳連結</mdui-button>
+              <mdui-button variant="text" data-delete-dir="{html.escape(base + "/deldir/" + fid)}" data-name="{html.escape(m.get("name", ""))}" data-count="{len(mine)}">刪除資料夾</mdui-button>
+            </div>
           </div>
           {sort_bar()}
           {private_file_rows(mine, base)}

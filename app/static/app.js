@@ -40,6 +40,7 @@
     const isPublic = form.hasAttribute("data-public");
     const folderInput = form.querySelector('[name="folder"]');
     const folderIdInput = form.querySelector('[name="folder_id"]');
+    const tokenInput = form.querySelector('[name="token"]');
     const btn = form.querySelector("[type=submit]");
     const panel = form.querySelector("[data-tp]");
     const pct = panel && panel.querySelector("[data-tp-pct]");
@@ -180,6 +181,7 @@
       const body = { upload_id: uploadId, filename: file.name, total_chunks: total };
       if (isPublic && folderInput && folderInput.value.trim()) body.folder = folderInput.value.trim();
       if (!isPublic && folderIdInput && folderIdInput.value) body.folder_id = folderIdInput.value;
+      if (tokenInput && tokenInput.value) body.token = tokenInput.value;
       const res = await fetch(mergeUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -337,6 +339,37 @@
           window.toast("資料夾已建立");
           window.location.reload();
         } catch { window.toast("建立失敗"); }
+      });
+    });
+
+    // 私人資料夾分享連結：建立 / 取消
+    document.querySelectorAll("[data-share-create]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        try {
+          const res = await fetch(`/api/folders/${btn.getAttribute("data-share-create")}/share`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ mode: btn.getAttribute("data-mode") || "view" }),
+          });
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          window.toast("分享連結已建立");
+          window.location.reload();
+        } catch { window.toast("建立失敗"); }
+      });
+    });
+    document.querySelectorAll("[data-unshare]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        if (!window.confirm("確定取消這個分享連結嗎？")) return;
+        try {
+          const res = await fetch("/api/share/revoke", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token: btn.getAttribute("data-unshare") }),
+          });
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          window.toast("已取消分享");
+          window.location.reload();
+        } catch { window.toast("取消失敗"); }
       });
     });
 

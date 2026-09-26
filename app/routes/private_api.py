@@ -21,20 +21,25 @@ from ..storage import (
     bw_pace,
     bw_record,
     bw_status,
+    check_rate_limit,
     chunk_dir,
     client_ip,
     create_private_folder,
+    create_share,
     delete_private_folder,
     get_private_folders,
+    get_share,
+    get_shares,
     private_files,
     probe_check,
+    revoke_share,
     stream_download,
     tag_ip,
     tagged_threads,
     threads_for_speed,
     validate_upload_id,
 )
-from ..ui import page, private_panel
+from ..ui import page, private_panel, share_file_rows, thread_panel
 
 router = APIRouter()
 
@@ -48,6 +53,17 @@ class MergePayload(BaseModel):
 
 class MkdirPayload(BaseModel):
     name: str = ""
+
+
+class SharePayload(BaseModel):
+    mode: str
+
+
+class ShareMergePayload(BaseModel):
+    upload_id: str
+    filename: str
+    total_chunks: int
+    token: str
 
 
 def _check_private(request: Request) -> None:
@@ -121,11 +137,25 @@ async def list_folders(request: Request):
     for f in private_files():
         if f.get("folder"):
             counts[f["folder"]] = counts.get(f["folder"], 0) + 1
+    from ..storage import get_shares as _gs
+
+    shares = _gs()
+    base = str(request.base_url).rstrip("/")
     if wants_html(request):
         return RedirectResponse("/", status_code=303)
     return {
         "folders": [
-            {"id": fid, "name": m.get("name", ""), "ctime": m.get("ctime", 0), "count": counts.get(fid, 0)}
+            {
+                "id": fid,
+                "name": m.get("name", ""),
+                "ctime": m.get("ctime", 0),
+                "count": counts.get(fid, 0),
+                "shares": [
+                    {"token": t, "mode": s["mode"], "url": f"{base}/s/{t}"}
+                    for t, s in shares.items()
+                    if s.get("folder_id") == fid
+                ],
+            }
             for fid, m in folders.items()
         ]
     }
@@ -141,6 +171,147 @@ async def delete_folder(request: Request, folder_id: str):
     if wants_html(request):
         return RedirectResponse(url="/", status_code=303)
     return {"success": True, "deleted_files": n}
+
+
+@router.post("/api/folders/{folder_id}/share")
+async def share_folder(request: Request, folder_id: str, payload: SharePayload):
+    if not request.session.get("auth"):
+        raise HTTPException(401)
+    token, meta = create_share(folder_id, payload.mode)
+    base = str(request.base_url).rstrip("/")
+    return {"success": True, "token": token, "mode": meta["mode"], "url": f"{base}/s/{token}"}
+
+
+@router.post("/api/share/revoke")
+async def unshare(request: Request, payload: dict):
+    if not request.session.get("auth"):
+        raise HTTPException(401)
+    ok = revoke_share(str(payload.get("token", "")))
+    if not ok:
+        raise HTTPException(404, "Share not found")
+    return {"success": True}
+
+
+@router.post("/api/share/merge_chunks")
+async def share_merge_chunks(request: Request, payload: ShareMergePayload):
+    """Upload into a shared private folder via an upload-mode link."""
+    import mimetypes as _mime
+    import os as _os
+
+    share = get_share(payload.token)
+    if not share:
+        raise HTTPException(404, "Share not found")
+    if share.get("mode") != "upload":
+        raise HTTPException(403, "This link is view-only")
+    folder_id = share["folder_id"]
+    if folder_id not in get_private_folders():
+        raise HTTPException(404, "Folder not found")
+    ip = client_ip(request)
+    check_rate_limit(ip)
+    validate_upload_id(payload.upload_id)
+    fid = str(uuid.uuid4())
+    _, ext = _os.path.splitext(payload.filename)
+    dest = _os.path.join(settings.upload_dir, fid + ext)
+    cdir = _os.path.join(settings.tmp_dir, f"pub_{payload.upload_id}")
+    written = assemble_chunks(cdir, dest, payload.total_chunks, None)
+    content_type = _mime.guess_type(payload.filename)[0] or "application/octet-stream"
+    with open(_os.path.join(settings.upload_dir, fid + ".json"), "w", encoding="utf-8") as f:
+        json.dump({"filename": payload.filename, "ext": ext, "content_type": content_type, "folder": folder_id}, f)
+    bw_record(ip, None, written)
+    base = str(request.base_url).rstrip("/")
+    download_url = f"{base}/dl/sh/{payload.token}/{fid}"
+    return {
+        "success": True,
+        "file_id": fid,
+        "filename": payload.filename,
+        "size_bytes": written,
+        "content_type": content_type,
+        "url": download_url,
+        "download_url": download_url,
+        "file_api_url": download_url,
+    }
+
+
+@router.get("/dl/sh/{token}/{file_id}")
+async def share_download(request: Request, token: str, file_id: str, preview: bool = False):
+    import mimetypes as _mime
+    import os as _os
+
+    share = get_share(token)
+    if not share:
+        raise HTTPException(404)
+    jp = _os.path.join(settings.upload_dir, file_id + ".json")
+    if not _os.path.exists(jp):
+        raise HTTPException(404)
+    with open(jp, encoding="utf-8") as f:
+        meta = json.load(f)
+    if meta.get("folder") != share["folder_id"]:
+        raise HTTPException(404)
+    path = _os.path.join(settings.upload_dir, file_id + meta.get("ext", ""))
+    ctype = meta.get("content_type") or _mime.guess_type(meta.get("filename", ""))[0] if preview else None
+    return stream_download(request, path, meta["filename"], inline=preview, content_type=ctype)
+
+
+@router.get("/s/{token}")
+async def share_page(request: Request, token: str):
+    """Shared private folder: view-only or upload-capable, no login needed."""
+    from ..ui import page as _page
+
+    share = get_share(token)
+    if not share:
+        if wants_html(request):
+            return HTMLResponse(_page("找不到", '<mdui-card class="card-pad"><p>連結無效或已被取消。</p></mdui-card>'), status_code=404)
+        return PlainTextResponse("Share not found.", status_code=404)
+    folders = get_private_folders()
+    meta = folders.get(share["folder_id"])
+    if not meta:
+        if wants_html(request):
+            return HTMLResponse(_page("找不到", '<mdui-card class="card-pad"><p>資料夾已刪除。</p></mdui-card>'), status_code=404)
+        return PlainTextResponse("Folder not found.", status_code=404)
+    name = meta.get("name", "")
+    can_upload = share.get("mode") == "upload"
+    files = [f for f in private_files() if f.get("folder") == share["folder_id"]]
+    base = str(request.base_url).rstrip("/")
+    if not wants_html(request):
+        lines = [f"Shared folder: {name}", f"mode: {share['mode']}", f"files: {len(files)}", ""]
+        for f in files:
+            lines += [f"  {f['name']}", f"    size: {f['bytes']}", f"    url: {base}/dl/sh/{token}/{f['id']}"]
+        if can_upload:
+            lines += ["", f"Upload: POST {base}/api/public/chunk parts, then POST {base}/api/share/merge_chunks with token"]
+        return PlainTextResponse("\n".join(lines))
+    for f in files:
+        f["bytes"] = f.get("bytes", 0)
+    up_card = f"""
+          <mdui-card variant="outlined" class="card-pad">
+            <h2>上傳到此資料夾</h2>
+            <form action="/api/public/chunk" method="post" data-chunked data-merge="/api/share/merge_chunks" data-public="1" data-probe="/api/public/probe">
+              <input type="hidden" name="token" value="{html.escape(token)}">
+              <div class="form-row">
+                <input type="file" name="file" required>
+                <mdui-button type="submit">上傳</mdui-button>
+              </div>
+              {thread_panel()}
+            </form>
+            <div data-upload-result></div>
+          </mdui-card>""" if can_upload else ""
+    return HTMLResponse(
+        _page(
+            name,
+            f"""
+        <mdui-card variant="filled" class="card-pad hero">
+          <h1>{html.escape(name)}</h1>
+          <p>分享資料夾 · {len(files)} 個檔案 · {"可上傳" if can_upload else "僅檢視"}</p>
+        </mdui-card>
+        <div class="stack">
+          <mdui-card variant="outlined" class="card-pad">
+            <h2>檔案（{len(files)}）</h2>
+            {share_file_rows(files, token, base)}
+          </mdui-card>
+          {up_card}
+        </div>""",
+            active="home",
+        )
+    )
 
 
 @router.post("/api/upload_chunk")
@@ -212,7 +383,7 @@ async def api_files(request: Request):
           <h1>私人雲端</h1>
           <p><a href="/">回私人模式首頁</a></p>
         </mdui-card>
-        <div class="stack">{private_panel(files, base, get_private_folders())}</div>""",
+        <div class="stack">{private_panel(files, base, get_private_folders(), get_shares())}</div>""",
             active="home",
             authed=True,
         )

@@ -240,7 +240,7 @@ def private_files() -> list[dict[str, Any]]:
     if not os.path.isdir(settings.upload_dir):
         return files
     for fn in os.listdir(settings.upload_dir):
-        if not fn.endswith(".json") or fn == "folders.json":
+        if not fn.endswith(".json") or fn in ("folders.json", "shares.json"):
             continue
         fid = fn[:-5]
         try:
@@ -388,7 +388,7 @@ def delete_private_folder(fid: str) -> int:
         raise HTTPException(404, "Folder not found")
     n = 0
     for fn in os.listdir(settings.upload_dir):
-        if not fn.endswith(".json") or fn == "folders.json":
+        if not fn.endswith(".json") or fn in ("folders.json", "shares.json"):
             continue
         jp = os.path.join(settings.upload_dir, fn)
         try:
@@ -408,6 +408,10 @@ def delete_private_folder(fid: str) -> int:
                 pass
     d.pop(fid, None)
     save_private_folders(d)
+    shares = get_shares()
+    for token in [t for t, s in shares.items() if s.get("folder_id") == fid]:
+        shares.pop(token, None)
+    save_shares(shares)
     return n
 
 
@@ -418,6 +422,52 @@ def public_folder_name(folder_id: str) -> str:
         return str(data.get("name", "") or "")
     except (OSError, ValueError):
         return ""
+
+
+def _shares_path() -> str:
+    return os.path.join(settings.upload_dir, "shares.json")
+
+
+def get_shares() -> dict[str, dict]:
+    try:
+        with open(_shares_path(), encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_shares(d: dict) -> None:
+    with open(_shares_path(), "w", encoding="utf-8") as f:
+        json.dump(d, f, ensure_ascii=False)
+
+
+def create_share(folder_id: str, mode: str) -> tuple[str, dict]:
+    import uuid
+
+    if mode not in ("view", "upload"):
+        raise HTTPException(400, "mode must be view or upload")
+    if folder_id not in get_private_folders():
+        raise HTTPException(404, "Folder not found")
+    token = str(uuid.uuid4())
+    meta = {"folder_id": folder_id, "mode": mode, "ctime": time.time()}
+    d = get_shares()
+    d[token] = meta
+    save_shares(d)
+    return token, meta
+
+
+def get_share(token: str) -> dict | None:
+    return get_shares().get(token)
+
+
+def revoke_share(token: str) -> bool:
+    d = get_shares()
+    if token not in d:
+        return False
+    d.pop(token, None)
+    save_shares(d)
+    return True
 
 
 _ip_tags: dict[str, tuple[int, float]] = {}

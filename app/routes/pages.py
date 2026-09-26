@@ -14,7 +14,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 
 from ..config import settings
 from ..negotiation import wants_html
-from ..storage import get_private_folders, private_files, public_folder_files, public_folder_name
+from ..storage import get_private_folders, get_shares, private_files, public_folder_files, public_folder_name
 from ..ui import file_rows, page, private_panel, public_upload_form
 
 router = APIRouter()
@@ -36,7 +36,7 @@ def _dashboard_html(request: Request, authed: bool) -> str:
           </div>
         </mdui-card>
         <div class="stack">
-          {private_panel(files, base, get_private_folders())}
+          {private_panel(files, base, get_private_folders(), get_shares())}
         </div>""",
             active="home",
             authed=True,

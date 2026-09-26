@@ -206,14 +206,54 @@ c.post("/api/upload_chunk", headers=J, files={"file_chunk": ("c", b"data")},
 m2 = c.post("/api/merge_chunks", headers=J,
             json={"upload_id": uid2, "filename": "w.txt", "total_chunks": 1, "folder_id": pfolder})
 assert m2.json()["success"]
+wfid = m2.json()["file_id"]
 fl = c.get("/api/folders", headers=J)
 assert any(x["id"] == pfolder and x["count"] == 1 for x in fl.json()["folders"])
 r = c.get("/", headers=B)
 assert "工作" in r.text and "data-delete-dir" in r.text and "未分類" in r.text
+assert "建立檢視連結" in r.text and "建立上傳連結" in r.text
+
+# --- share folder: view-only vs upload ---
+sv = c.post(f"/api/folders/{pfolder}/share", headers=J, json={"mode": "view"})
+assert sv.status_code == 200
+vtok = sv.json()["token"]
+su = c.post(f"/api/folders/{pfolder}/share", headers=J, json={"mode": "upload"})
+utok = su.json()["token"]
+assert su.json()["url"].endswith(f"/s/{utok}")
+
+sp = c.get(f"/s/{vtok}", headers=B)
+assert "工作" in sp.text and "w.txt" in sp.text and "僅檢視" in sp.text
+assert "上傳到此資料夾" not in sp.text
+sp = c.get(f"/s/{utok}", headers=B)
+assert "可上傳" in sp.text and "上傳到此資料夾" in sp.text
+sp = c.get(f"/s/{vtok}", headers=J)
+assert "mode: view" in sp.text
+
+vd = c.get(f"/dl/sh/{vtok}/{wfid}", headers=J)
+assert vd.status_code == 200 and vd.content == b"data"
+
+uid3 = str(uuid.uuid4())
+c.post("/api/public/chunk", headers=J, files={"file_chunk": ("c", b"shared")},
+       data={"upload_id": uid3, "index": "0", "filename": "s.txt"})
+bad = c.post("/api/share/merge_chunks", headers=J,
+             json={"upload_id": uid3, "filename": "s.txt", "total_chunks": 1, "token": vtok})
+assert bad.status_code == 403, "view-only link must not upload"
+good = c.post("/api/share/merge_chunks", headers=J,
+              json={"upload_id": uid3, "filename": "s.txt", "total_chunks": 1, "token": utok})
+assert good.status_code == 200
+sd = c.get(f"/dl/sh/{utok}/{good.json()['file_id']}", headers=J)
+assert sd.content == b"shared"
+
+rv = c.post("/api/share/revoke", headers=J, json={"token": vtok})
+assert rv.status_code == 200
+assert c.get(f"/s/{vtok}", headers=J).status_code == 404
+print("share view/upload/revoke OK")
+
 d = c.get(f"/deldir/{pfolder}", headers=J)
-assert d.json()["deleted_files"] == 1
+assert d.json()["deleted_files"] == 2
 fl = c.get("/api/folders", headers=J)
 assert all(x["id"] != pfolder for x in fl.json()["folders"])
+assert c.get(f"/s/{utok}", headers=J).status_code == 404, "deleting folder kills its shares"
 print("private folders OK")
 
 v = c.get(f"/view/{priv_id}", headers=J)
