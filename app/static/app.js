@@ -303,6 +303,39 @@
       wrap.appendChild(btn);
     });
 
+    // 檔案排序：時間 / 大小 / 名稱
+    document.querySelectorAll("[data-sortbar]").forEach((bar) => {
+      const card = bar.closest(".card-pad");
+      const list = card ? card.querySelector("mdui-list") : null;
+      if (!list) return;
+      const btns = bar.querySelectorAll("[data-sort-by]");
+      const dirBtn = bar.querySelector("[data-sort-dir]");
+      const apply = () => {
+        const by = bar.getAttribute("data-by") || "time";
+        const desc = (bar.getAttribute("data-dir") || "desc") === "desc";
+        const items = Array.from(list.querySelectorAll("mdui-list-item"));
+        items.sort((a, b) => {
+          let r;
+          if (by === "name") {
+            const x = a.getAttribute("data-sort-name") || "", y = b.getAttribute("data-sort-name") || "";
+            r = x < y ? -1 : x > y ? 1 : 0;
+          } else {
+            r = parseFloat(a.getAttribute("data-sort-" + by) || "0") - parseFloat(b.getAttribute("data-sort-" + by) || "0");
+          }
+          return desc ? -r : r;
+        });
+        items.forEach((el) => list.appendChild(el));
+        btns.forEach((b) => b.setAttribute("variant", b.getAttribute("data-sort-by") === by ? "filled" : "text"));
+        if (dirBtn) dirBtn.setAttribute("icon", desc ? "arrow_downward" : "arrow_upward");
+      };
+      btns.forEach((b) => b.addEventListener("click", () => { bar.setAttribute("data-by", b.getAttribute("data-sort-by")); apply(); }));
+      if (dirBtn) dirBtn.addEventListener("click", () => {
+        bar.setAttribute("data-dir", (bar.getAttribute("data-dir") || "desc") === "desc" ? "asc" : "desc");
+        apply();
+      });
+      apply();
+    });
+
     // 建立空資料夾
     document.querySelectorAll("[data-create-folder]").forEach((btn) => {
       btn.addEventListener("click", async () => {

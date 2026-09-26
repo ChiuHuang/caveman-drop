@@ -144,6 +144,7 @@ names = [x["name"] for x in r.json()["files"]]
 assert "big.bin" in names
 r = c.get("/", headers=B)
 assert "big.bin" in r.text and "直接連結" in r.text and "刪除" in r.text and "預覽" in r.text
+assert "data-sortbar" in r.text and "data-sort-size" in r.text
 print("private file row buttons OK")
 
 dl = c.get(f"/dl/{priv_id}", headers={**J, "Range": "bytes=0-99"})

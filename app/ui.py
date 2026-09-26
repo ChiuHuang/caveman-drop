@@ -182,7 +182,11 @@ def private_file_rows(files: list[dict], base: str) -> str:
         dl = f"{base}/dl/{f['id']}"
         pv = f"{base}/view/{f['id']}"
         rows.append(
-            "<mdui-list-item>"
+            "<mdui-list-item"
+            f' data-sort-name="{html.escape(f["name"].lower())}"'
+            f' data-sort-size="{int(f.get("bytes", 0))}"'
+            f' data-sort-time="{float(f.get("ctime", 0))}"'
+            ">"
             f'<mdui-icon slot="icon" name="description"></mdui-icon>'
             f'<div><div class="fname">{html.escape(f["name"])}</div>'
             f'<div class="fmeta">{fmt_size(f.get("bytes", 0))} · {fmt_time(f.get("ctime", 0))}</div></div>'
@@ -193,6 +197,16 @@ def private_file_rows(files: list[dict], base: str) -> str:
             "</mdui-list-item>"
         )
     return f'<mdui-list class="file-list">{"".join(rows)}</mdui-list>'
+
+
+def sort_bar() -> str:
+    return """<div class="sortbar" data-sortbar data-dir="desc" data-by="time">
+      <span class="muted">排序：</span>
+      <mdui-button variant="filled" data-sort-by="time">時間</mdui-button>
+      <mdui-button variant="text" data-sort-by="size">大小</mdui-button>
+      <mdui-button variant="text" data-sort-by="name">名稱</mdui-button>
+      <mdui-button-icon data-sort-dir icon="arrow_downward" title="切換順序"></mdui-button-icon>
+    </div>"""
 
 
 def private_panel(files: list[dict], base: str) -> str:
@@ -211,6 +225,7 @@ def private_panel(files: list[dict], base: str) -> str:
         </mdui-card>
         <mdui-card variant="outlined" class="card-pad">
           <h2>私人檔案（{len(files)}）</h2>
+          {sort_bar()}
           {private_file_rows(files, base)}
         </mdui-card>"""
 

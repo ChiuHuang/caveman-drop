@@ -42,6 +42,7 @@ pre.curl, .mdui-prose pre {
 pre.curl code, .mdui-prose pre code { background: transparent; color: inherit; padding: 0; }
 .muted { opacity: .65; font-size: .9rem; }
 .limits-first { margin: 0 0 8px; }
+.sortbar { display: flex; gap: 6px; align-items: center; margin: 4px 0 8px; flex-wrap: wrap; }
 .nav-foot { padding: 12px; font-size: .8rem; opacity: .65; }
 .prose-wrap { padding: 20px 24px; }
 /* 文件排版（自帶，不依賴 CDN） */
