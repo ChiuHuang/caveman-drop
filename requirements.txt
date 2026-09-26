@@ -1,0 +1,9 @@
+# Production deps (also mirrored in pyproject.toml for uv users).
+fastapi>=0.115
+uvicorn[standard]>=0.30
+gunicorn>=22
+python-dotenv>=1.0
+python-multipart>=0.0.18
+itsdangerous>=2.1
+markdown>=3.6
+httpx>=0.27
