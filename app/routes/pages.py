@@ -14,7 +14,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 
 from ..config import settings
 from ..negotiation import wants_html
-from ..storage import private_files, public_folder_files
+from ..storage import get_private_folders, private_files, public_folder_files, public_folder_name
 from ..ui import file_rows, page, private_panel, public_upload_form
 
 router = APIRouter()
@@ -36,7 +36,7 @@ def _dashboard_html(request: Request, authed: bool) -> str:
           </div>
         </mdui-card>
         <div class="stack">
-          {private_panel(files, base)}
+          {private_panel(files, base, get_private_folders())}
         </div>""",
             active="home",
             authed=True,
@@ -48,8 +48,6 @@ def _dashboard_html(request: Request, authed: bool) -> str:
           <h1>CaveMan Drop</h1>
           <p>免帳號的匿名檔案分享。傳檔後立刻拿到永久連結。</p>
           <div class="form-row">
-            <a href="/upload"><mdui-button>上傳檔案</mdui-button></a>
-            <mdui-button variant="outlined" data-create-folder>建立空資料夾</mdui-button>
             <a href="/docs"><mdui-button variant="text">使用文件</mdui-button></a>
           </div>
         </mdui-card>
@@ -256,6 +254,7 @@ def _folder_html(request: Request, folder_id: str) -> HTMLResponse | None:
     for f in files:
         f["download_url"] = f"{base}/dl/pub/{folder_id}/{f['id']}"
     rows = file_rows(files, folder_id, base)
+    title = public_folder_name(folder_id) or "公開資料夾"
     if authed:
         add_card = """
           <mdui-card variant="outlined" class="card-pad">
@@ -270,11 +269,11 @@ def _folder_html(request: Request, folder_id: str) -> HTMLResponse | None:
             {public_upload_form(folder_id)}
           </mdui-card>"""
     body = page(
-        f"資料夾 {folder_id[:8]}",
+        title,
         f"""
         <mdui-card variant="filled" class="card-pad hero">
-          <h1>公開資料夾</h1>
-          <p><code>{html.escape(folder_id)}</code>
+          <h1>{html.escape(title)}</h1>
+          <p>公開資料夾 · {len(files)} 個檔案
           <mdui-button variant="text" data-copy="{base}/f/{folder_id}">複製分享連結</mdui-button></p>
         </mdui-card>
         <div class="stack">

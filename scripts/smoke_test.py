@@ -15,6 +15,8 @@ r = c.get("/", headers=B)
 print("browser /:", r.status_code, r.headers["content-type"], "mdui" in r.text.lower())
 assert "data-chunked" in r.text and "data-tp" in r.text
 assert "16 線程" not in r.text and "瀏覽器使用圖形介面" not in r.text
+assert "建立空資料夾" not in r.text and '<a href="/upload"><mdui-button>' not in r.text
+print("hero cleaned OK")
 r = c.get("/", headers=J)
 print("curl /:", r.status_code, r.text.splitlines()[0])
 assert r.text.startswith("CaveMan Drop")
@@ -60,9 +62,9 @@ p = c.get(f"/dl/s/{fid}?preview=1", headers=J)
 assert "inline" in p.headers["content-disposition"]
 print("single download + metadata OK")
 
-# --- folder flow: explicit create, then join ---
-cf = c.post("/api/public/folder", headers=J)
-assert cf.status_code == 200
+# --- folder flow: explicit create with name, then join ---
+cf = c.post("/api/public/folder", headers=J, json={"name": "派對"})
+assert cf.status_code == 200 and cf.json()["folder_name"] == "派對"
 folder = cf.json()["folder_id"]
 f2 = c.post("/api/public/upload", headers=J, files={"file": ("j.txt", b"joined")}, data={"folder": folder})
 assert f2.json()["folder_id"] == folder
@@ -81,6 +83,7 @@ print("folder download OK")
 
 h = c.get(f"/f/{folder}", headers=B)
 assert "公開資料夾" in h.text and "加入檔案到此資料夾" in h.text
+assert "派對" in h.text and "<code>" not in h.text
 print("share page OK")
 
 # --- public 16-thread chunked upload (everyone, no login) ---
@@ -192,6 +195,26 @@ print("private file row buttons OK")
 dl = c.get(f"/dl/{priv_id}", headers={**J, "Range": "bytes=0-99"})
 assert dl.status_code == 206 and dl.headers["Content-Range"].startswith("bytes 0-99/")
 print("range download OK")
+
+# --- private cloud folders: mkdir, upload into it, deldir ---
+mf = c.post("/api/folders", headers=J, json={"name": "工作"})
+assert mf.status_code == 200
+pfolder = mf.json()["folder_id"]
+uid2 = str(uuid.uuid4())
+c.post("/api/upload_chunk", headers=J, files={"file_chunk": ("c", b"data")},
+       data={"upload_id": uid2, "index": "0", "filename": "w.txt"})
+m2 = c.post("/api/merge_chunks", headers=J,
+            json={"upload_id": uid2, "filename": "w.txt", "total_chunks": 1, "folder_id": pfolder})
+assert m2.json()["success"]
+fl = c.get("/api/folders", headers=J)
+assert any(x["id"] == pfolder and x["count"] == 1 for x in fl.json()["folders"])
+r = c.get("/", headers=B)
+assert "工作" in r.text and "data-delete-dir" in r.text and "未分類" in r.text
+d = c.get(f"/deldir/{pfolder}", headers=J)
+assert d.json()["deleted_files"] == 1
+fl = c.get("/api/folders", headers=J)
+assert all(x["id"] != pfolder for x in fl.json()["folders"])
+print("private folders OK")
 
 v = c.get(f"/view/{priv_id}", headers=J)
 assert v.status_code == 200

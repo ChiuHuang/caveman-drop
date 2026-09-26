@@ -39,6 +39,7 @@
     const mergeUrl = form.getAttribute("data-merge");
     const isPublic = form.hasAttribute("data-public");
     const folderInput = form.querySelector('[name="folder"]');
+    const folderIdInput = form.querySelector('[name="folder_id"]');
     const btn = form.querySelector("[type=submit]");
     const panel = form.querySelector("[data-tp]");
     const pct = panel && panel.querySelector("[data-tp-pct]");
@@ -178,6 +179,7 @@
     try {
       const body = { upload_id: uploadId, filename: file.name, total_chunks: total };
       if (isPublic && folderInput && folderInput.value.trim()) body.folder = folderInput.value.trim();
+      if (!isPublic && folderIdInput && folderIdInput.value) body.folder_id = folderIdInput.value;
       const res = await fetch(mergeUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -318,6 +320,37 @@
 
     // 預覽（靜態列；動態結果列走全域委派）
 
+    // 私人新增資料夾
+    document.querySelectorAll("form[data-mkdir]").forEach((form) => {
+      form.addEventListener("submit", async (ev) => {
+        ev.preventDefault();
+        const input = form.querySelector('[name="name"]');
+        const name = input && input.value.trim();
+        if (!name) { window.toast("請輸入資料夾名稱"); return; }
+        try {
+          const res = await fetch("/api/folders", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name }),
+          });
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          window.toast("資料夾已建立");
+          window.location.reload();
+        } catch { window.toast("建立失敗"); }
+      });
+    });
+
+    // 刪除私人資料夾（含其中的檔案）
+    document.querySelectorAll("[data-delete-dir]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const name = btn.getAttribute("data-name") || "";
+        const count = btn.getAttribute("data-count") || "0";
+        if (window.confirm(`確定刪除資料夾「${name}」（含 ${count} 個檔案）嗎？無法復原。`)) {
+          window.location.href = btn.getAttribute("data-delete-dir");
+        }
+      });
+    });
+
     // 刪除確認
     document.querySelectorAll("[data-delete]").forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -376,19 +409,26 @@
       apply();
     });
 
-    // 建立空資料夾（有結果框就地顯示，否則跳轉）
+    // 建立資料夾（有結果框就地顯示，否則跳轉）
     document.querySelectorAll("[data-create-folder]").forEach((btn) => {
       btn.addEventListener("click", async () => {
         btn.loading = true;
         try {
-          const res = await fetch("/api/public/folder", { method: "POST" });
-          const data = await res.json();
           const host = btn.closest(".card-pad") || btn.parentElement;
+          const nameInput = host ? host.querySelector('[name="mkdir-name"]') : null;
+          const body = nameInput && nameInput.value.trim() ? { name: nameInput.value.trim() } : {};
+          const res = await fetch("/api/public/folder", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          const data = await res.json();
           const out = host ? host.querySelector("[data-upload-result]") : null;
           if (out) {
             const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
+            const title = data.folder_name ? esc(data.folder_name) : "資料夾已建立";
             out.innerHTML = `<mdui-card variant="filled" class="card-pad result-box">
-              <div><strong>資料夾已建立</strong></div>
+              <div><strong>${title}</strong></div>
               <div class="rlink"><code>${esc(data.folder_url)}</code><span class="rlink-btns">` +
               `<a href="${esc(data.folder_url)}"><mdui-button variant="text">開啟</mdui-button></a>` +
               `<mdui-button variant="text" data-copy="${esc(data.folder_url)}">複製</mdui-button></span></div></mdui-card>`;

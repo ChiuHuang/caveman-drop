@@ -236,10 +236,11 @@ def public_folder_files(folder_id: str) -> list[dict[str, Any]]:
 
 def private_files() -> list[dict[str, Any]]:
     files: list[dict[str, Any]] = []
+    folders = get_private_folders()
     if not os.path.isdir(settings.upload_dir):
         return files
     for fn in os.listdir(settings.upload_dir):
-        if not fn.endswith(".json"):
+        if not fn.endswith(".json") or fn == "folders.json":
             continue
         fid = fn[:-5]
         try:
@@ -249,6 +250,7 @@ def private_files() -> list[dict[str, Any]]:
             if not os.path.exists(path):
                 continue
             size = os.path.getsize(path)
+            fid_folder = meta.get("folder")
             files.append(
                 {
                     "id": fid,
@@ -256,6 +258,8 @@ def private_files() -> list[dict[str, Any]]:
                     "size": size // 1024,
                     "bytes": size,
                     "ctime": os.path.getctime(path),
+                    "folder": fid_folder,
+                    "folder_name": (folders.get(fid_folder) or {}).get("name", "") if fid_folder else "",
                 }
             )
         except Exception:
@@ -347,6 +351,73 @@ def single_meta(file_id: str) -> dict[str, Any]:
 def single_path(file_id: str, ext: str = "") -> str:
     validate_public_id(file_id, "file id")
     return os.path.join(settings.single_dir, file_id + ext)
+
+
+def _private_folders_path() -> str:
+    return os.path.join(settings.upload_dir, "folders.json")
+
+
+def get_private_folders() -> dict[str, dict]:
+    try:
+        with open(_private_folders_path(), encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_private_folders(d: dict) -> None:
+    with open(_private_folders_path(), "w", encoding="utf-8") as f:
+        json.dump(d, f, ensure_ascii=False)
+
+
+def create_private_folder(name: str) -> tuple[str, dict]:
+    import uuid
+
+    fid = str(uuid.uuid4())
+    meta = {"name": (name or "").strip()[:64] or "未命名資料夾", "ctime": time.time()}
+    d = get_private_folders()
+    d[fid] = meta
+    save_private_folders(d)
+    return fid, meta
+
+
+def delete_private_folder(fid: str) -> int:
+    d = get_private_folders()
+    if fid not in d:
+        raise HTTPException(404, "Folder not found")
+    n = 0
+    for fn in os.listdir(settings.upload_dir):
+        if not fn.endswith(".json") or fn == "folders.json":
+            continue
+        jp = os.path.join(settings.upload_dir, fn)
+        try:
+            with open(jp, encoding="utf-8") as f:
+                meta = json.load(f)
+        except (OSError, ValueError):
+            continue
+        if meta.get("folder") == fid:
+            file_id = fn[:-5]
+            p = os.path.join(settings.upload_dir, file_id + meta.get("ext", ""))
+            try:
+                if os.path.exists(p):
+                    os.remove(p)
+                os.remove(jp)
+                n += 1
+            except OSError:
+                pass
+    d.pop(fid, None)
+    save_private_folders(d)
+    return n
+
+
+def public_folder_name(folder_id: str) -> str:
+    try:
+        with open(os.path.join(public_folder_dir(folder_id), "folder.json"), encoding="utf-8") as f:
+            data = json.load(f)
+        return str(data.get("name", "") or "")
+    except (OSError, ValueError):
+        return ""
 
 
 _ip_tags: dict[str, tuple[int, float]] = {}

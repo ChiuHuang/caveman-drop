@@ -209,8 +209,30 @@ def sort_bar() -> str:
     </div>"""
 
 
-def private_panel(files: list[dict], base: str) -> str:
-    """Private-mode dashboard fragment: chunked upload + file list."""
+def private_panel(files: list[dict], base: str, folders: dict) -> str:
+    """Private cloud: upload into folders, mkdir inline, grouped file cards."""
+    uncat = [f for f in files if not f.get("folder")]
+    opts = '<option value="">未分類</option>' + "".join(
+        f'<option value="{html.escape(fid)}">{html.escape(m.get("name", ""))}</option>'
+        for fid, m in folders.items()
+    )
+    sections = [f"""
+        <mdui-card variant="outlined" class="card-pad">
+          <h2>未分類（{len(uncat)}）</h2>
+          {sort_bar()}
+          {private_file_rows(uncat, base)}
+        </mdui-card>"""]
+    for fid, m in folders.items():
+        mine = [f for f in files if f.get("folder") == fid]
+        sections.append(f"""
+        <mdui-card variant="outlined" class="card-pad">
+          <h2>{html.escape(m.get("name", ""))}（{len(mine)}）</h2>
+          <div class="form-row">
+            <mdui-button variant="text" data-delete-dir="{html.escape(base + "/deldir/" + fid)}" data-name="{html.escape(m.get("name", ""))}" data-count="{len(mine)}">刪除資料夾</mdui-button>
+          </div>
+          {sort_bar()}
+          {private_file_rows(mine, base)}
+        </mdui-card>""")
     return f"""
         <mdui-card variant="outlined" class="card-pad">
           <h2>上傳檔案</h2>
@@ -218,16 +240,22 @@ def private_panel(files: list[dict], base: str) -> str:
           <form action="/api/upload_chunk" method="post" data-chunked data-merge="/api/merge_chunks" data-probe="/api/probe">
             <div class="form-row">
               <input type="file" name="file" required>
+              <select name="folder_id" class="folderselect" title="上傳到">{opts}</select>
               <mdui-button type="submit">開始上傳</mdui-button>
             </div>
             {thread_panel()}
           </form>
         </mdui-card>
         <mdui-card variant="outlined" class="card-pad">
-          <h2>私人檔案（{len(files)}）</h2>
-          {sort_bar()}
-          {private_file_rows(files, base)}
-        </mdui-card>"""
+          <h2>新增資料夾</h2>
+          <form data-mkdir>
+            <div class="form-row">
+              <mdui-text-field name="name" label="資料夾名稱" required></mdui-text-field>
+              <mdui-button type="submit">建立</mdui-button>
+            </div>
+          </form>
+        </mdui-card>
+        {"".join(sections)}"""
 
 
 def public_upload_form(folder_id: str | None = None) -> str:
@@ -263,6 +291,7 @@ def public_upload_form(folder_id: str | None = None) -> str:
             <div data-tabpanel="mkdir" hidden>
               <p class="muted">建好後把資料夾連結分享給別人，對方就能往裡面上傳。</p>
               <div class="form-row">
+                <mdui-text-field name="mkdir-name" label="資料夾名稱（選填）"></mdui-text-field>
                 <mdui-button data-create-folder>建立資料夾</mdui-button>
               </div>
               <div data-upload-result></div>

@@ -23,6 +23,9 @@ from ..storage import (
     bw_status,
     chunk_dir,
     client_ip,
+    create_private_folder,
+    delete_private_folder,
+    get_private_folders,
     private_files,
     probe_check,
     stream_download,
@@ -40,6 +43,11 @@ class MergePayload(BaseModel):
     upload_id: str
     filename: str
     total_chunks: int
+    folder_id: Optional[str] = None
+
+
+class MkdirPayload(BaseModel):
+    name: str = ""
 
 
 def _check_private(request: Request) -> None:
@@ -94,6 +102,47 @@ async def private_probe(request: Request, probe: UploadFile = File(...)):
     return {"threads": threads, "you": ip}
 
 
+@router.post("/api/folders")
+async def create_folder(request: Request, payload: MkdirPayload):
+    if not request.session.get("auth"):
+        raise HTTPException(401)
+    fid, meta = create_private_folder(payload.name)
+    return {"success": True, "folder_id": fid, "name": meta["name"]}
+
+
+@router.get("/api/folders")
+async def list_folders(request: Request):
+    if not request.session.get("auth"):
+        if wants_html(request):
+            return RedirectResponse("/login", status_code=303)
+        return JSONResponse(status_code=401, content={"error": "unauthorized"})
+    folders = get_private_folders()
+    counts: dict[str, int] = {}
+    for f in private_files():
+        if f.get("folder"):
+            counts[f["folder"]] = counts.get(f["folder"], 0) + 1
+    if wants_html(request):
+        return RedirectResponse("/", status_code=303)
+    return {
+        "folders": [
+            {"id": fid, "name": m.get("name", ""), "ctime": m.get("ctime", 0), "count": counts.get(fid, 0)}
+            for fid, m in folders.items()
+        ]
+    }
+
+
+@router.get("/deldir/{folder_id}")
+async def delete_folder(request: Request, folder_id: str):
+    if not request.session.get("auth"):
+        if wants_html(request):
+            return RedirectResponse(url="/login", status_code=303)
+        return JSONResponse(status_code=401, content={"error": "unauthorized"})
+    n = delete_private_folder(folder_id)
+    if wants_html(request):
+        return RedirectResponse(url="/", status_code=303)
+    return {"success": True, "deleted_files": n}
+
+
 @router.post("/api/upload_chunk")
 async def upload_chunk(
     request: Request,
@@ -131,13 +180,18 @@ async def upload_chunk(
 async def merge_chunks(request: Request, payload: MergePayload):
     _check_private(request)
     validate_upload_id(payload.upload_id)
+    folder_id = payload.folder_id
+    if folder_id:
+        folders = get_private_folders()
+        if folder_id not in folders:
+            raise HTTPException(404, "Folder not found")
     fid = str(uuid.uuid4())
     _, ext = os.path.splitext(payload.filename)
     final_path = os.path.join(settings.upload_dir, fid + ext)
     cdir = os.path.join(settings.tmp_dir, f"priv_{payload.upload_id}")
     assemble_chunks(cdir, final_path, payload.total_chunks, None)
     with open(os.path.join(settings.upload_dir, fid + ".json"), "w", encoding="utf-8") as f:
-        json.dump({"filename": payload.filename, "ext": ext}, f)
+        json.dump({"filename": payload.filename, "ext": ext, "folder": folder_id}, f)
     return {"success": True, "file_id": fid}
 
 
@@ -155,10 +209,10 @@ async def api_files(request: Request):
         page(
             "私人檔案",
             f"""<mdui-card variant="filled" class="card-pad hero">
-          <h1>私人檔案（{len(files)}）</h1>
+          <h1>私人雲端</h1>
           <p><a href="/">回私人模式首頁</a></p>
         </mdui-card>
-        <div class="stack">{private_panel(files, base)}</div>""",
+        <div class="stack">{private_panel(files, base, get_private_folders())}</div>""",
             active="home",
             authed=True,
         )

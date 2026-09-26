@@ -22,8 +22,8 @@ id）。不帶 folder 就是單檔直連，不會建資料夾，回傳 `file_id`
 
 ### `POST /api/public/folder`
 
-建立空資料夾。回傳 `folder_id`、`folder_url`、`upload_url`、
-`folder_api_url`。
+建立空資料夾（選填 JSON `name`）。回傳 `folder_id`、`folder_name`、
+`folder_url`、`upload_url`、`folder_api_url`。
 
 ### `GET /api/public/folder/{folder_id}`
 
@@ -50,8 +50,11 @@ id）。不帶 folder 就是單檔直連，不會建資料夾，回傳 `file_id`
 | 方法 | 路徑 | 說明 |
 |---|---|---|
 | `GET` | `/api/files` | 私人檔案清單（JSON；瀏覽器看 HTML） |
-| `POST` | `/api/upload_chunk` | 欄位：`file_chunk`、`upload_id`、`index`、`filename`（前端以 16 線程並行） |
-| `POST` | `/api/merge_chunks` | JSON：`upload_id`、`filename`、`total_chunks` |
+| `POST` | `/api/upload_chunk` | 欄位：`file_chunk`、`upload_id`、`index`、`filename` |
+| `POST` | `/api/merge_chunks` | JSON：`upload_id`、`filename`、`total_chunks`、選填 `folder_id` |
+| `POST` | `/api/folders` | JSON：`name` —— 新增私人雲端資料夾 |
+| `GET` | `/api/folders` | 私人資料夾清單（含檔案數） |
+| `GET` | `/deldir/{folder_id}` | 刪除私人資料夾（含其中的檔案） |
 | `GET` | `/dl/{file_id}` | 支援 Range 的私人下載（`?preview=1` 預覽） |
 | `GET` | `/view/{file_id}` | 線上預覽 |
 | `GET` | `/del/{file_id}` | 刪除（瀏覽器會先跳確認再導回首頁） |

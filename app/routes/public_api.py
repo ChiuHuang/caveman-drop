@@ -34,6 +34,7 @@ from ..storage import (
     probe_check,
     public_folder_dir,
     public_folder_files,
+    public_folder_name,
     single_meta,
     single_path,
     stream_download,
@@ -206,14 +207,26 @@ async def _upload_to_folder(request: Request, ip: str, file: UploadFile, folder:
 @router.post("/api/public/folder")
 async def public_create_folder(request: Request):
     """Create an empty public folder and return share/upload/API URLs."""
+    import time as _time
     import uuid
 
+    name = ""
+    try:
+        body = await request.json()
+        if isinstance(body, dict):
+            name = str(body.get("name", "") or "")[:64].strip()
+    except Exception:
+        pass
     folder_id = str(uuid.uuid4())
-    os.makedirs(public_folder_dir(folder_id), exist_ok=True)
+    fdir = public_folder_dir(folder_id)
+    os.makedirs(fdir, exist_ok=True)
+    with open(os.path.join(fdir, "folder.json"), "w", encoding="utf-8") as f:
+        json.dump({"name": name, "ctime": _time.time()}, f, ensure_ascii=False)
     base = str(request.base_url).rstrip("/")
     return {
         "success": True,
         "folder_id": folder_id,
+        "folder_name": name,
         "folder_url": f"{base}/f/{folder_id}",
         "upload_url": f"{base}/f/{folder_id}",
         "folder_api_url": f"{base}/api/public/folder/{folder_id}",
@@ -291,6 +304,7 @@ async def public_merge_chunks(request: Request, payload: PublicMergePayload):
         return {
             "success": True,
             "folder_id": folder_id,
+            "folder_name": public_folder_name(folder_id),
             "file_id": fid,
             "filename": original_name,
             "size_bytes": written,
@@ -463,6 +477,7 @@ async def public_folder_api(request: Request, folder_id: str):
     if not wants_html(request):
         return {
             "folder_id": folder_id,
+            "folder_name": public_folder_name(folder_id),
             "folder_url": f"{base}/f/{folder_id}",
             "share_url": f"{base}/f/{folder_id}",
             "upload_url": f"{base}/f/{folder_id}",

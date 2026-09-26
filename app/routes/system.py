@@ -33,7 +33,7 @@ def _api_payload(request: Request) -> dict:
             "create_folder": {
                 "method": "POST",
                 "url": f"{base}/api/public/folder",
-                "notes": "Creates an empty public folder and returns share/upload URLs.",
+                "notes": "Creates an empty public folder and returns share/upload URLs. Optional JSON body {name}.",
             },
             "upload": {
                 "method": "POST",
