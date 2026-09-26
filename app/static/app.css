@@ -18,6 +18,10 @@
 .file-list { border-radius: 12px; }
 .empty { padding: 20px; text-align: center; opacity: .8; }
 .form-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
+form[data-chunked] .form-row { flex-wrap: nowrap; }
+form[data-chunked] mdui-text-field { flex: 1 1 200px; min-width: 160px; }
+form[data-chunked] input[type="file"] { flex: 0 1 auto; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 640px) { form[data-chunked] .form-row { flex-wrap: wrap; } }
 .result-box { margin-top: 12px; }
 .result-box code { overflow-wrap: anywhere; }
 input[type="file"] { font: inherit; font-size: .9rem; max-width: 100%; }

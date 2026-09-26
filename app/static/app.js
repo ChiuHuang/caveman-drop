@@ -1,8 +1,7 @@
-// CaveMan Drop 瀏覽器互動：側欄、主題、複製、公開上傳、
-// 16 線程分段上傳、16 線程下載、預覽、刪除確認。
+// CaveMan Drop 瀏覽器互動：側欄、主題、複製、分段上傳、並行下載、預覽、刪除確認。
 (function () {
   const THREADS = 16;
-  const CHUNK = 4 * 1024 * 1024; // 4 MB per upload chunk
+  const CHUNK = 4 * 1024 * 1024;
 
   function ready(fn) {
     if (document.readyState !== "loading") fn();
@@ -32,7 +31,7 @@
     return (n / 1073741824).toFixed(2) + " GB";
   }
 
-  // ---- 16 線程分段上傳（含 IDM 式線程表 + 分段條 + 測速 + 暫停 + 限速鎖單線程）----
+  // ---- 分段上傳（含線程表 + 分段條 + 測速 + 暫停）----
   async function chunkedUpload(form) {
     const input = form.querySelector('input[type="file"]');
     const file = input && input.files[0];
@@ -187,7 +186,7 @@
     }
   }
 
-  // ---- 16 線程下載：Range 分段並行抓取後合併 ----
+  // ---- 並行下載：Range 分段並行抓取後合併 ----
   async function mtDownload(btn) {
     const url = btn.getAttribute("data-mt-download");
     const name = btn.getAttribute("data-name") || "download";
@@ -264,12 +263,12 @@
       btn.addEventListener("click", () => copyText(btn.getAttribute("data-copy")));
     });
 
-    // 16 線程分段上傳（公開 + 私人共用，data-merge 指向各自合併端點）
+    // 分段上傳（公開 + 私人共用，data-merge 指向各自合併端點）
     document.querySelectorAll("form[data-chunked]").forEach((form) => {
       form.addEventListener("submit", (ev) => { ev.preventDefault(); chunkedUpload(form); });
     });
 
-    // 16 線程下載
+    // 並行下載
     document.querySelectorAll("[data-mt-download]").forEach((btn) => {
       btn.addEventListener("click", () => mtDownload(btn));
     });

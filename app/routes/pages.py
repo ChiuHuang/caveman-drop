@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from ..config import settings
 from ..negotiation import wants_html
 from ..storage import private_files, public_folder_files
-from ..ui import endpoint_card, file_rows, page, private_panel, public_upload_form
+from ..ui import file_rows, page, private_panel, public_upload_form
 
 router = APIRouter()
 
@@ -64,13 +64,6 @@ def _dashboard_html(request: Request, authed: bool) -> str:
             <p>登入後可使用私人檔案清單、預覽與刪除，不受分享頻寬限速影響。</p>
             <a href="/login"><mdui-button>登入</mdui-button></a>
           </mdui-card>
-          <div>
-            <h2>端點一覽</h2>
-            {endpoint_card("POST", "/api/public/upload", "匿名上傳。不帶 folder 會自動建立新的分享資料夾。", "/upload")}
-            {endpoint_card("GET", "/f/{{folder_id}}", "資料夾瀏覽頁 — 把這個連結分享給別人。", "/upload")}
-            {endpoint_card("GET", "/api", "機器可讀的 API 索引（程式拿 JSON）。", "/api")}
-            {endpoint_card("GET", "/docs", "圖書館式指南與 API 參考。", "/docs")}
-          </div>
         </div>""",
         active="home",
         authed=False,
