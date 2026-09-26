@@ -96,16 +96,21 @@
     };
     render();
 
-    // 測速：每 0.5 秒結算
+    // 測速：每 0.5 秒結算，動畫跟著速度走
     let lastBytes = 0;
     const speedTimer = setInterval(() => {
       const v = (state.doneBytes - lastBytes) * 2;
       lastBytes = state.doneBytes;
       if (speed) speed.textContent = state.done >= total ? "完成" : `${fmtMB(v)}/s · ${state.done}/${total} 塊`;
+      if (panel) {
+        const mbs = v / 1048576;
+        panel.style.setProperty("--pulse-dur", mbs > 50 ? ".3s" : mbs > 10 ? ".6s" : mbs > 0.5 ? "1.2s" : "2s");
+      }
     }, 500);
     if (pauseBtn) pauseBtn.addEventListener("click", () => {
       state.paused = !state.paused;
       pauseBtn.textContent = state.paused ? "繼續" : "暫停";
+      if (panel) panel.classList.toggle("paused", state.paused);
       window.toast(state.paused ? "已暫停" : "繼續上傳");
     });
 
@@ -130,6 +135,7 @@
             const js = await res.json();
             if (js && js.throttled && note) {
               note.textContent = `分享頻寬限速中（約 ${js.throttle_mbps || 90} Mbps），上傳繼續`;
+              if (panel) panel.classList.add("throttled");
             }
           } catch { /* 非 JSON 回應就忽略 */ }
         } catch (err) { state.failed = err; setRow(t, "失敗", "err"); return; }

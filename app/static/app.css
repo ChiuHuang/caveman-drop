@@ -73,13 +73,15 @@ mdui-card { --mdui-shape-corner-medium: 16px; }
 .tp-seglabel { margin: 10px 0 4px; font-size: .8rem; }
 .segbar { display: flex; gap: 2px; margin-bottom: 12px; }
 .segbar i { flex: 1 1 0; min-width: 2px; height: 14px; border-radius: 2px; background: rgba(127,127,127,.28); }
-.segbar i.active { background: rgb(var(--mdui-color-primary)); animation: segblink .8s infinite alternate; }
-.segbar i.done { background: rgb(var(--mdui-color-primary)); animation: none; }
+.segbar i.active { background: var(--seg-color, rgb(var(--mdui-color-primary))); animation: segblink var(--pulse-dur, .8s) infinite alternate; }
+.segbar i.done { background: var(--seg-color, rgb(var(--mdui-color-primary))); animation: none; }
 @keyframes segblink { from { opacity: .45; } to { opacity: 1; } }
+.tp.throttled { --seg-color: #ff8f00; }
+.tp.paused .segbar i.active, .tp.paused .st.live { animation-play-state: paused; opacity: .6; }
 .tptable { width: 100%; max-width: 420px; border-collapse: collapse; font-size: .85rem; }
 .tptable th, .tptable td { text-align: left; padding: 4px 8px; border-bottom: 1px solid rgba(127,127,127,.2); }
 .tptable th { opacity: .6; font-weight: 600; }
 .st.idle { opacity: .55; }
-.st.live { color: rgb(var(--mdui-color-primary)); font-weight: 600; animation: segblink .8s infinite alternate; }
+.st.live { color: var(--seg-color, rgb(var(--mdui-color-primary))); font-weight: 600; animation: segblink var(--pulse-dur, .8s) infinite alternate; }
 .st.ok { color: rgb(var(--mdui-color-tertiary, var(--mdui-color-primary))); }
 .st.err { color: rgb(var(--mdui-color-error)); }
