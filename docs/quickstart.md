@@ -1,27 +1,28 @@
 # 快速開始
 
-## 用 curl 上傳
+## 上傳（單檔直連，不建資料夾）
 
 ```bash
-# 一次建好分享資料夾並上傳檔案
 curl -F file=@photo.jpg http://localhost:20042/api/public/upload
 ```
 
-回傳（JSON）：
+回傳（JSON）：直接給下載連結，不會建資料夾。
 
 ```json
 {
   "success": true,
-  "folder_id": "…",
   "file_id": "…",
-  "download_url": "http://localhost:20042/dl/pub/…/…",
-  "folder_url": "http://localhost:20042/f/…"
+  "download_url": "http://localhost:20042/dl/s/…"
 }
 ```
 
-## 加入現有資料夾
+## 建資料夾、合傳
+
+網頁切到「建立資料夾」分頁建好後，把資料夾連結分享給別人；
+對方在資料夾頁上傳就會加進同一包。程式用：
 
 ```bash
+curl -X POST http://localhost:20042/api/public/folder
 curl -F file=@notes.txt -F folder=FOLDER_ID http://localhost:20042/api/public/upload
 ```
 

@@ -7,5 +7,6 @@ mobile_token.txt
 airdrop_files/
 airdrop_tmp/
 public_uploads/
+public_singles/
 mobile_token.txt
 *.log

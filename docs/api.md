@@ -10,9 +10,9 @@
 ### `POST /api/public/upload`
 
 匿名上傳。Multipart 欄位：`file`（必填）、`folder`（選填，既有資料夾
-id）。回傳 `folder_id`、`file_id`、`filename`、`size_bytes`、
-`content_type`、`url`、`download_url`、`folder_url`、`share_url`、
-`folder_api_url`、`file_api_url`。
+id）。不帶 folder 就是單檔直連，不會建資料夾，回傳 `file_id`、`filename`、
+`size_bytes`、`download_url`、`file_api_url`；帶 folder 才回傳
+`folder_url` 等資料夾欄位。
 
 ### `POST /api/public/chunk` → `POST /api/public/merge_chunks`
 
@@ -39,6 +39,11 @@ id）。回傳 `folder_id`、`file_id`、`filename`、`size_bytes`、
 
 下載本體。支援 `Range:` 續傳 / 並行抓取。加 `?preview=1` 以 inline
 方式回傳，方便瀏覽器預覽。
+
+### 單檔直連（無資料夾）
+
+- `GET /api/public/single/{file_id}`：單檔資訊與直連。
+- `GET /dl/s/{file_id}`：下載（`?preview=1` 預覽）。
 
 ## 私人（密碼 session 或 `?token=` 手機 token）
 

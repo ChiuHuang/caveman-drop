@@ -335,6 +335,20 @@ def folder_lock(folder_id: str) -> asyncio.Lock:
     return _public_folder_locks[folder_id]
 
 
+def single_meta(file_id: str) -> dict[str, Any]:
+    validate_public_id(file_id, "file id")
+    jp = os.path.join(settings.single_dir, file_id + ".json")
+    if not os.path.exists(jp):
+        raise HTTPException(404, "File not found")
+    with open(jp, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def single_path(file_id: str, ext: str = "") -> str:
+    validate_public_id(file_id, "file id")
+    return os.path.join(settings.single_dir, file_id + ext)
+
+
 _ip_tags: dict[str, tuple[int, float]] = {}
 _probe_log: dict[str, deque] = defaultdict(deque)
 

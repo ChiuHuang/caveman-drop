@@ -40,7 +40,7 @@ def _api_payload(request: Request) -> dict:
                 "url": f"{base}/api/public/upload",
                 "form_fields": {
                     "file": "the file to upload (required)",
-                    "folder": "existing folder_id to add this file to (optional — omit to start a new folder)",
+                    "folder": "existing folder_id to add this file to (optional — omitted means a single direct file, no folder is created)",
                 },
                 "example_curl": f'curl -F "file=@myfile.txt" {base}/api/public/upload',
             },
@@ -62,6 +62,15 @@ def _api_payload(request: Request) -> dict:
                 "method": "GET",
                 "url": f"{base}/dl/pub/{{folder_id}}/{{file_id}}",
                 "notes": "Supports HTTP Range requests for resumable/parallel downloads.",
+            },
+            "single_metadata": {
+                "method": "GET",
+                "url": f"{base}/api/public/single/{{file_id}}",
+            },
+            "single_download": {
+                "method": "GET",
+                "url": f"{base}/dl/s/{{file_id}}",
+                "notes": "Direct download for folderless single files. Range supported; ?preview=1 previews inline.",
             },
             "upload_page": {
                 "method": "GET",
@@ -122,8 +131,10 @@ POST {base}/api/public/upload
 Content-Type: multipart/form-data
 Fields:
 - file: required file
-- folder: optional existing folder_id
-Returns JSON containing `url`, `download_url`, `folder_url`, `folder_api_url`, and `file_api_url`.
+- folder: optional existing folder_id (adds to that folder; omit for a
+  single direct file — no folder is created)
+Returns JSON containing `url` and `download_url` (plus `folder_url` etc.
+only when a folder was used).
 
 ## Create an empty public folder
 POST {base}/api/public/folder
@@ -136,6 +147,10 @@ POST {base}/api/public/merge_chunks (JSON: `upload_id`, `filename`,
 `total_chunks`, optional `folder`) to assemble. Returns the same payload
 as the single-POST upload. POST 1 MB to /api/public/probe first for a
 speed-based thread recommendation (slow links get 32/64/128).
+
+## Single direct files
+GET {base}/api/public/single/{{file_id}} — metadata + direct URL.
+GET {base}/dl/s/{{file_id}} — download (?preview=1 previews inline).
 
 ## List a folder
 GET {base}/api/public/folder/{{folder_id}}

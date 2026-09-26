@@ -187,15 +187,22 @@
       if (!res.ok) throw new Error(data.detail || ("HTTP " + res.status));
       if (btn) btn.loading = false;
       if (isPublic) {
+        const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
         const out = form.parentElement.querySelector("[data-upload-result]");
-        const links = [data.download_url || data.url, data.folder_url || data.share_url]
-          .filter(Boolean).map((u) => `<div><a href="${u}"><code>${u}</code></a>
-            <mdui-button variant="text" data-copy="${u}">複製</mdui-button></div>`).join("");
-        if (out) {
-          out.innerHTML = `<mdui-card variant="filled" class="card-pad result-box">
-            <div><strong>已上傳：</strong> ${data.filename} (${fmtMB(data.size_bytes)})</div>${links}</mdui-card>`;
-          out.querySelectorAll("[data-copy]").forEach((b) => b.addEventListener("click", () => copyText(b.getAttribute("data-copy"))));
+        const durl = data.download_url || data.url;
+        const furl = data.folder_url || data.share_url;
+        let html = `<mdui-card variant="filled" class="card-pad result-box">
+          <div><strong>已上傳：</strong> ${esc(data.filename)} (${fmtMB(data.size_bytes)})</div>
+          <div class="rlink"><code>${esc(durl)}</code><span class="rlink-btns">` +
+          (furl ? "" : `<mdui-button variant="text" data-preview="${esc(durl)}?preview=1" data-name="${esc(data.filename)}">預覽</mdui-button>`) +
+          `<mdui-button variant="text" data-copy="${esc(durl)}">複製</mdui-button></span></div>`;
+        if (furl) {
+          html += `<div class="rlink"><span class="rlink-label">資料夾</span><code>${esc(furl)}</code><span class="rlink-btns">` +
+            `<a href="${esc(furl)}"><mdui-button variant="text">開啟</mdui-button></a>` +
+            `<mdui-button variant="text" data-copy="${esc(furl)}">複製</mdui-button></span></div>`;
         }
+        html += `</mdui-card>`;
+        if (out) out.innerHTML = html;
         if (panel) panel.hidden = true;
         window.toast("上傳完成");
       } else {
@@ -281,8 +288,22 @@
       window.toast("主題：" + zh[next]);
     });
 
-    document.querySelectorAll("[data-copy]").forEach((btn) => {
-      btn.addEventListener("click", () => copyText(btn.getAttribute("data-copy")));
+    // 全域委派：複製 / 預覽（含動態加入的結果列）
+    document.addEventListener("click", (ev) => {
+      const cp = ev.target && ev.target.closest ? ev.target.closest("[data-copy]") : null;
+      if (cp) { copyText(cp.getAttribute("data-copy")); return; }
+      const pv = ev.target && ev.target.closest ? ev.target.closest("[data-preview]") : null;
+      if (pv) preview(pv.getAttribute("data-preview"), pv.getAttribute("data-name") || "");
+    });
+
+    // 上傳 / 建資料夾頁籤
+    document.querySelectorAll("[data-tabs]").forEach((tabs) => {
+      const root = tabs.parentElement;
+      const show = (v) => {
+        try { tabs.value = v; } catch {}
+        root.querySelectorAll("[data-tabpanel]").forEach((p) => { p.hidden = p.getAttribute("data-tabpanel") !== v; });
+      };
+      tabs.querySelectorAll("mdui-tab").forEach((t) => t.addEventListener("click", () => show(t.getAttribute("value"))));
     });
 
     // 分段上傳（公開 + 私人共用，data-merge 指向各自合併端點）
@@ -295,10 +316,7 @@
       btn.addEventListener("click", () => mtDownload(btn));
     });
 
-    // 預覽
-    document.querySelectorAll("[data-preview]").forEach((btn) => {
-      btn.addEventListener("click", () => preview(btn.getAttribute("data-preview"), btn.getAttribute("data-name") || ""));
-    });
+    // 預覽（靜態列；動態結果列走全域委派）
 
     // 刪除確認
     document.querySelectorAll("[data-delete]").forEach((btn) => {
@@ -358,14 +376,28 @@
       apply();
     });
 
-    // 建立空資料夾
+    // 建立空資料夾（有結果框就地顯示，否則跳轉）
     document.querySelectorAll("[data-create-folder]").forEach((btn) => {
       btn.addEventListener("click", async () => {
+        btn.loading = true;
         try {
           const res = await fetch("/api/public/folder", { method: "POST" });
           const data = await res.json();
-          window.location.href = data.folder_url;
+          const host = btn.closest(".card-pad") || btn.parentElement;
+          const out = host ? host.querySelector("[data-upload-result]") : null;
+          if (out) {
+            const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
+            out.innerHTML = `<mdui-card variant="filled" class="card-pad result-box">
+              <div><strong>資料夾已建立</strong></div>
+              <div class="rlink"><code>${esc(data.folder_url)}</code><span class="rlink-btns">` +
+              `<a href="${esc(data.folder_url)}"><mdui-button variant="text">開啟</mdui-button></a>` +
+              `<mdui-button variant="text" data-copy="${esc(data.folder_url)}">複製</mdui-button></span></div></mdui-card>`;
+            window.toast("資料夾已建立");
+          } else {
+            window.location.href = data.folder_url;
+          }
         } catch { window.toast("無法建立資料夾"); }
+        finally { btn.loading = false; }
       });
     });
   });

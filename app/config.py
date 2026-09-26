@@ -67,6 +67,7 @@ class Settings:
     upload_dir: str = field(default_factory=lambda: os.getenv("UPLOAD_DIR", "airdrop_files"))
     tmp_dir: str = field(default_factory=lambda: os.getenv("TMP_DIR", "airdrop_tmp"))
     public_dir: str = field(default_factory=lambda: os.getenv("PUBLIC_DIR", "public_uploads"))
+    single_dir: str = field(default_factory=lambda: os.getenv("SINGLE_DIR", "public_singles"))
     max_file_size: int = field(
         default_factory=lambda: _int("MAX_FILE_SIZE_GB", 5) * 1024**3
     )
@@ -108,7 +109,7 @@ class Settings:
                 self.port = int(os.getenv("SERVER_PORT", str(self.port)))
             except ValueError:
                 pass
-        for d in (self.upload_dir, self.tmp_dir, self.public_dir):
+        for d in (self.upload_dir, self.tmp_dir, self.public_dir, self.single_dir):
             os.makedirs(d, exist_ok=True)
 
 

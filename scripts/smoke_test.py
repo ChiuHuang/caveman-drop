@@ -32,6 +32,7 @@ print("llms OK")
 r = c.get("/upload", headers=B)
 assert "data-chunked" in r.text and "data-tp-segs" in r.text
 assert "先說好" in r.text
+assert "建立資料夾" in r.text and "data-tabs" in r.text
 print("browser /upload OK (thread panel present)")
 
 r = c.get("/docs", headers=B)
@@ -41,11 +42,31 @@ r = c.get("/docs/api", headers=J)
 assert r.text.startswith("# API 參考")
 print("curl /docs/api OK")
 
-# --- public upload + folder + download + preview ---
+# --- single upload: direct link, NO folder created ---
+import glob as _glob
+_before = set(_glob.glob("public_uploads/*"))
 f = c.post("/api/public/upload", headers=J, files={"file": ("hello.txt", b"hi caveman")})
 assert f.status_code == 200
-fid, folder = f.json()["file_id"], f.json()["folder_id"]
-print("upload OK:", f.json()["filename"], f.json()["size_bytes"])
+assert "folder_id" not in f.json() and "folder_url" not in f.json()
+fid = f.json()["file_id"]
+print("single upload OK:", f.json()["filename"], f.json()["size_bytes"])
+assert set(_glob.glob("public_uploads/*")) == _before, "single upload must not create a folder"
+d = c.get(f"/dl/s/{fid}", headers=J)
+assert d.status_code == 200 and d.content == b"hi caveman"
+assert "attachment" in d.headers["content-disposition"]
+m = c.get(f"/api/public/single/{fid}", headers=J)
+assert m.json()["filename"] == "hello.txt"
+p = c.get(f"/dl/s/{fid}?preview=1", headers=J)
+assert "inline" in p.headers["content-disposition"]
+print("single download + metadata OK")
+
+# --- folder flow: explicit create, then join ---
+cf = c.post("/api/public/folder", headers=J)
+assert cf.status_code == 200
+folder = cf.json()["folder_id"]
+f2 = c.post("/api/public/upload", headers=J, files={"file": ("j.txt", b"joined")}, data={"folder": folder})
+assert f2.json()["folder_id"] == folder
+jfid = f2.json()["file_id"]
 
 g = c.get(f"/api/public/folder/{folder}", headers=J)
 assert g.status_code == 200 and len(g.json()["files"]) == 1
@@ -54,12 +75,9 @@ assert "data-mt-download" in g.text and "data-preview" in g.text
 assert "16 線程下載" not in g.text
 print("folder json+html OK")
 
-d = c.get(f"/dl/pub/{folder}/{fid}", headers=J)
-assert d.status_code == 200 and d.content == b"hi caveman"
-assert "attachment" in d.headers["content-disposition"]
-p = c.get(f"/dl/pub/{folder}/{fid}?preview=1", headers=J)
-assert "inline" in p.headers["content-disposition"]
-print("download + preview-disposition OK")
+d = c.get(f"/dl/pub/{folder}/{jfid}", headers=J)
+assert d.status_code == 200 and d.content == b"joined"
+print("folder download OK")
 
 h = c.get(f"/f/{folder}", headers=B)
 assert "公開資料夾" in h.text and "加入檔案到此資料夾" in h.text
@@ -77,8 +95,9 @@ for i in range(2):
 m = c.post("/api/public/merge_chunks", headers=J,
            json={"upload_id": puid, "filename": "pub.bin", "total_chunks": 2})
 assert m.status_code == 200 and m.json()["size_bytes"] == 1001
-pfid, pfold = m.json()["file_id"], m.json()["folder_id"]
-d = c.get(f"/dl/pub/{pfold}/{pfid}", headers=J)
+assert "folder_id" not in m.json(), "chunked merge without folder must stay single"
+pfid = m.json()["file_id"]
+d = c.get(f"/dl/s/{pfid}", headers=J)
 assert d.content == pblob + b"z"
 print("public chunked upload+merge OK")
 

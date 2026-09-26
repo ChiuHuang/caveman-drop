@@ -231,18 +231,39 @@ def private_panel(files: list[dict], base: str) -> str:
 
 
 def public_upload_form(folder_id: str | None = None) -> str:
-    """Public chunked upload form (+ thread monitor) for everyone."""
-    hidden = f'<input type="hidden" name="folder" value="{html.escape(folder_id)}">' if folder_id else ""
-    folder_field = "" if folder_id else '<mdui-text-field name="folder" label="資料夾 ID（選填，空白會建立新資料夾）"></mdui-text-field>'
-    return f"""
+    """Public upload UI. Folder page: join-only form. Else: upload/create tabs."""
+    if folder_id:
+        return f"""
             {limits_note()}
             <form action="/api/public/chunk" method="post" data-chunked data-merge="/api/public/merge_chunks" data-public="1" data-probe="/api/public/probe">
-              {hidden}
+              <input type="hidden" name="folder" value="{html.escape(folder_id)}">
               <div class="form-row">
                 <input type="file" name="file" required>
-                {folder_field}
                 <mdui-button type="submit">上傳</mdui-button>
               </div>
               {thread_panel()}
             </form>
             <div data-upload-result></div>"""
+    return f"""
+            <mdui-tabs value="up" data-tabs>
+              <mdui-tab value="up">上傳檔案</mdui-tab>
+              <mdui-tab value="mkdir">建立資料夾</mdui-tab>
+            </mdui-tabs>
+            <div data-tabpanel="up">
+              {limits_note()}
+              <form action="/api/public/chunk" method="post" data-chunked data-merge="/api/public/merge_chunks" data-public="1" data-probe="/api/public/probe">
+                <div class="form-row">
+                  <input type="file" name="file" required>
+                  <mdui-button type="submit">上傳</mdui-button>
+                </div>
+                {thread_panel()}
+              </form>
+              <div data-upload-result></div>
+            </div>
+            <div data-tabpanel="mkdir" hidden>
+              <p class="muted">建好後把資料夾連結分享給別人，對方就能往裡面上傳。</p>
+              <div class="form-row">
+                <mdui-button data-create-folder>建立資料夾</mdui-button>
+              </div>
+              <div data-upload-result></div>
+            </div>"""

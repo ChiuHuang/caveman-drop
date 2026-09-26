@@ -24,6 +24,12 @@ form[data-chunked] input[type="file"] { flex: 0 1 auto; max-width: 260px; overfl
 @media (max-width: 640px) { form[data-chunked] .form-row { flex-wrap: wrap; } }
 .result-box { margin-top: 12px; }
 .result-box code { overflow-wrap: anywhere; }
+.rlink { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
+.rlink code { flex: 1 1 auto; min-width: 0; word-break: break-all; font-size: .78rem; line-height: 1.5; }
+.rlink-label { flex: 0 0 auto; font-size: .8rem; opacity: .65; }
+.rlink-btns { flex: 0 0 auto; display: flex; gap: 2px; align-items: center; }
+[data-tabpanel] { padding-top: 4px; }
+mdui-tabs { margin-bottom: 4px; }
 input[type="file"] { font: inherit; font-size: .9rem; max-width: 100%; }
 input[type="file"]::file-selector-button {
   font: inherit; font-weight: 600; cursor: pointer;
