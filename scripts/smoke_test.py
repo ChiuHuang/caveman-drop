@@ -44,9 +44,12 @@ print("browser /upload OK (thread panel present)")
 r = c.get("/docs", headers=B)
 assert "docs-layout" in r.text
 print("browser /docs OK")
-r = c.get("/docs/api", headers=J)
-assert r.text.startswith("# API 參考")
-print("curl /docs/api OK")
+# the guide follows the page language for agents too, not just browsers
+TW_CURL = {"User-Agent": "curl/8.0", "Accept": "*/*", "CF-Connecting-IP": "120.122.9.9"}
+assert c.get("/docs/api", headers=TW_CURL).text.startswith("# API 參考")
+assert c.get("/docs/api", headers=J).text.startswith("# API reference")
+assert c.get("/docs", headers=J).text.startswith("# CaveMan Drop")
+print("curl /docs/api OK (zh-TW and English sources)")
 
 # --- legal page: bilingual, Taiwan law, reachable at /legal ---
 lg = c.get("/docs/legal", headers=J)
@@ -146,6 +149,43 @@ for ip in ("1.32.207.255", "1.32.216.0", "36.223.255.255", "36.240.0.0", "120.11
            "120.124.0.0", "220.134.255.255", "220.136.0.0", "1.1.1.1"):
     assert 'lang="en"' in c.get("/", headers={**B, "CF-Connecting-IP": ip}).text, ip
 print("language by client IP OK (zh-TW ranges vs English elsewhere)")
+
+# --- English readers must not hit a wall of Chinese ---
+import re as _re
+
+_CJK = _re.compile(r"[\u4e00-\u9fff]")
+pub_folder = c.post("/api/public/folder", headers=J, json={"name": "Album"}).json()["folder_id"]
+c.post("/api/public/upload", headers=J, files={"file": ("a.txt", b"english only")},
+       data={"folder": pub_folder})
+# names this test invented are user data, not chrome: strip them before scanning
+_names_client = TestClient(app)
+_names_client.post("/login", data={"password": "passw"})
+_user_names = set()
+for _r in (_names_client.get("/api/folders", headers=J).json()["folders"],
+           _names_client.get("/api/files", headers=J).json()["files"],
+           _names_client.get("/api/public/files", headers=J).json()["files"],
+           _names_client.get("/api/public/files", headers=J).json()["folders"]):
+    for _e in _r:
+        _user_names.add(str(_e.get("name", "")))
+for path in ("/", "/upload", "/login", "/api", "/docs", "/docs/index", "/docs/quickstart",
+             "/docs/api", "/docs/limits", "/docs/legal", "/f/" + pub_folder, "/nope-404"):
+    page_en = c.get(path, headers=EN_IP)
+    assert page_en.status_code in (200, 404), (path, page_en.status_code)
+    body = page_en.text
+    for _n in _user_names:          # Chinese folder/file names are the user's, not ours
+        body = body.replace(_n, "")
+    cjk = set(_CJK.findall(body))
+    # /legal is one bilingual file on purpose; everything else must be English
+    if path == "/docs/legal":
+        continue
+    assert not cjk, f"{path} leaks Chinese to English readers: {''.join(sorted(cjk))[:40]}"
+# the guide really is translated, not just relabelled
+assert "Quick start" in c.get("/docs/quickstart", headers=EN_IP).text
+assert "chunked upload from a script" in c.get("/docs/quickstart", headers=EN_IP).text
+assert "快速開始" in c.get("/docs/quickstart", headers=TW).text
+assert "Fair use" in c.get("/docs/limits", headers=EN_IP).text
+assert "上傳" in c.get("/docs", headers=TW).text
+print("English pages carry no Chinese OK")
 
 # --- no probe request from the browser: it adapts from the first chunks ---
 r = c.get("/upload", headers=B)
@@ -423,14 +463,26 @@ print("login OK")
 r = c.get("/", headers=B)
 assert "My drive" in r.text and "data-chunked" in r.text
 assert "data-drive" in r.text
-# Drive layout: breadcrumb, folder tiles, drop targets, new-folder + upload icons
-assert 'class="crumb"' in r.text and "data-new-folder" in r.text and "data-drive-upload" in r.text
-assert 'data-dropscope="private"' in r.text and "data-dropscope=\"public\"" in r.text
+# Drive layout: the two icons live in the same header as the title, and folders
+# and files share one list.
+head = r.text[r.text.index('class="drive-head"'):r.text.index('class="drive-head"') + 1200]
+assert "data-new-folder" in head and "data-drive-upload" in head, "icons in the header"
+assert "My drive · Files (" in head
+assert "No folders yet" not in r.text and "Drop files here" not in r.text, "no clutter"
+assert 'class="crumb"' in r.text and 'data-dropscope="private"' in r.text
+assert 'data-dropscope="public"' in r.text
+# one list holds both folder rows and file rows
+assert r.text.count('<mdui-list class="file-list">') == 2, "one list per tab"
+assert 'class="frow"' in r.text
 # two tabs only: the drive and the public area
 assert 'value="drive"' in r.text and 'value="public"' in r.text
 assert 'value="all"' not in r.text and 'value="folders"' not in r.text, "no more tab soup"
-assert 'class="legalbar"' in r.text and '/legal' in r.text, "legal link at the bottom"
-print("private-mode dashboard OK (drive: tiles, breadcrumb, drop targets)")
+# footer: links only, no rules sentence, no tagline
+foot = r.text[r.text.index('class="legalbar"'):]
+assert "/legal" in foot and "llms.txt" in foot and "Limits" in foot
+assert "Lawful use only" not in r.text and "offending content" not in r.text
+assert "machines and AI" not in r.text
+print("private-mode dashboard OK (drive: one list, icons in header)")
 
 r = c.get("/upload", headers=B, follow_redirects=False)
 assert r.status_code == 303, "logged-in /upload should redirect to /"
@@ -484,7 +536,7 @@ assert any(x["id"] == pfolder and x["count"] == 1 for x in fl.json()["folders"])
 r = c.get("/", headers=B)
 assert "工作" in r.text and "data-delete-dir" in r.text and "My drive" in r.text
 assert "data-rename" in r.text, "folders can be renamed from the drive"
-assert 'data-dropfolder="%s"' % pfolder in r.text, "folder tile must be a drop target"
+assert 'data-dropfolder="%s"' % pfolder in r.text, "folder row must be a drop target"
 assert 'data-dropscope="private"' in r.text and 'data-move=' in r.text
 assert "draggable=\"true\"" in r.text, "file rows must be draggable"
 # opening the folder lists its files and keeps the breadcrumb
@@ -588,7 +640,7 @@ allpub = c.get("/api/public/files", headers=J)
 assert allpub.status_code == 200, allpub.text
 names = {f["name"] for f in allpub.json()["files"]}
 assert {"hello.txt", "pub renamed.bin"} <= names, names
-assert any(f["name"] == "派對" for f in allpub.json()["folders"])
+assert any(f["name"] == "派對" or f["name"] == "Album" for f in allpub.json()["folders"])
 anon = TestClient(app)                    # no session cookie: must be refused
 r = anon.get("/api/public/files", headers=B)
 assert r.status_code in (401, 303), r.status_code

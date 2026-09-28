@@ -67,6 +67,7 @@ def other(lang: str) -> str:
 # Every user-facing string, keyed. `{}`-style placeholders are filled in order.
 STRINGS: dict[str, dict[str, str]] = {
     "lang_zh": {ZH: "繁體中文", EN: "English"},
+    "lang_switch_tip": {ZH: "切換語言", EN: "Switch language"},
     "site_name": {ZH: "CaveMan Drop", EN: "CaveMan Drop"},
     "nav_home": {ZH: "首頁", EN: "Home"},
     "nav_upload": {ZH: "上傳", EN: "Upload"},
@@ -74,10 +75,6 @@ STRINGS: dict[str, dict[str, str]] = {
     "nav_docs": {ZH: "文件", EN: "Docs"},
     "nav_login": {ZH: "登入", EN: "Sign in"},
     "nav_logout": {ZH: "登出", EN: "Sign out"},
-    "nav_foot": {
-        ZH: "匿名檔案分享 · 機器 / AI 請看 /llms.txt",
-        EN: "Anonymous file sharing · machines and AI: /llms.txt",
-    },
     "tagline": {
         ZH: "免帳號的匿名檔案分享。傳檔後立刻拿到永久連結。",
         EN: "Anonymous file sharing, no account. Permanent link the moment it lands.",
@@ -158,32 +155,19 @@ STRINGS: dict[str, dict[str, str]] = {
     "empty_files": {ZH: "還沒有檔案。", EN: "No files yet."},
     "private_h1": {ZH: "私人模式", EN: "Private mode"},
     "private_logged_in": {ZH: "已登入", EN: "Signed in"},
-    "tab_all": {ZH: "全部（{n}）", EN: "All ({n})"},
-    "tab_private": {ZH: "私人（{n}）", EN: "Private ({n})"},
-    "tab_folders": {ZH: "資料夾（{n}）", EN: "Folders ({n})"},
     "tab_public": {ZH: "公開（{n}）", EN: "Public ({n})"},
-    "new_folder_h": {ZH: "新增資料夾", EN: "New folder"},
     # private drive
     "drive_title": {ZH: "我的雲端", EN: "My drive"},
     "drive_new_folder": {ZH: "新增資料夾", EN: "New folder"},
-    "drive_no_folders": {
-        ZH: "還沒有資料夾。按右上角的資料夾圖示新增一個。",
-        EN: "No folders yet. Use the folder icon up top to add one.",
-    },
     "drive_items": {ZH: "{n} 個項目", EN: "{n} items"},
     "drive_files_h": {ZH: "{name} · 檔案（{n}）", EN: "{name} · Files ({n})"},
-    "drive_hint": {
-        ZH: "把檔案拖進來就會上傳到這個資料夾，也可以拖到下面的資料夾。",
-        EN: "Drop files here to upload into this folder, or onto a folder below.",
-    },
+    "tab_public_short": {ZH: "公開", EN: "Public"},
     "btn_rename": {ZH: "改名", EN: "Rename"},
     "dialog_rename_h": {ZH: "改名", EN: "Rename"},
     "dialog_name": {ZH: "名稱", EN: "Name"},
     "btn_save": {ZH: "儲存", EN: "Save"},
     "toast_rename_ok": {ZH: "已改名", EN: "Renamed"},
     "toast_rename_fail": {ZH: "改名失敗", EN: "Rename failed"},
-    "public_folders_h": {ZH: "公開資料夾（{n}）", EN: "Public folders ({n})"},
-    "public_files_h": {ZH: "公開檔案（{n}）", EN: "Public files ({n})"},
     "uncategorised": {ZH: "未分類", EN: "Uncategorised"},
     "share_view_link": {ZH: "檢視連結", EN: "View link"},
     "share_upload_link": {ZH: "上傳連結", EN: "Upload link"},
@@ -274,10 +258,6 @@ STRINGS: dict[str, dict[str, str]] = {
     "private_cloud_h": {ZH: "私人雲端", EN: "Private cloud"},
     "back_home": {ZH: "回私人模式首頁", EN: "Back to private mode"},
     "docs_kicker": {ZH: "文件", EN: "Docs"},
-    "docs_zh_only": {
-        ZH: "文件內容目前僅有繁體中文版本。",
-        EN: "The guide content is currently Traditional Chinese only.",
-    },
 }
 
 

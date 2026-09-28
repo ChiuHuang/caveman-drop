@@ -783,6 +783,15 @@
       });
     });
 
+    // 資料夾列的「打開」圖示
+    document.querySelectorAll("[data-open]").forEach((btn) => {
+      btn.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        window.location.href = btn.getAttribute("data-open");
+      });
+    });
+
     // 雲端工具列：新增資料夾（資料夾圖示）＋上傳（雲朵圖示）
     document.querySelectorAll("[data-new-folder]").forEach((btn) => {
       btn.addEventListener("click", async () => {

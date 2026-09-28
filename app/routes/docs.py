@@ -20,6 +20,7 @@ from ..ui import page
 router = APIRouter()
 
 DOCS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "docs")
+DOCS_EN_DIR = os.path.join(DOCS_DIR, "en")
 
 PAGES = [
     ("index", "介紹", "Overview"),
@@ -32,12 +33,23 @@ PAGES = [
 _md = md_lib.Markdown(extensions=["fenced_code", "tables"])
 
 
-def _load(slug: str) -> str | None:
-    path = os.path.join(DOCS_DIR, f"{slug}.md")
+def _read(path: str) -> str | None:
     if not os.path.exists(path):
         return None
     with open(path, encoding="utf-8") as f:
         return f.read()
+
+
+def _load(slug: str, lang: str = "zh-TW") -> str | None:
+    """`docs/en/<slug>.md` for English readers, `docs/<slug>.md` otherwise.
+
+    `legal.md` is one bilingual file, so it is served as-is either way.
+    """
+    if lang != "zh-TW" and slug != "legal":
+        src = _read(os.path.join(DOCS_EN_DIR, f"{slug}.md"))
+        if src is not None:
+            return src
+    return _read(os.path.join(DOCS_DIR, f"{slug}.md"))
 
 
 def _docs_shell(lang: str, active: str, body_html: str, slug: str = "index") -> str:
@@ -50,11 +62,6 @@ def _docs_shell(lang: str, active: str, body_html: str, slug: str = "index") -> 
             f'<mdui-list-item href="{href}" class="{cls}" rounded>'
             f"{html.escape(title)}</mdui-list-item>"
         )
-    note = (
-        ""
-        if lang == "zh-TW" or slug == "legal"
-        else '<p class="muted docs-note">' + html.escape(t(lang, "docs_zh_only")) + "</p>"
-    )
     return page(
         t(lang, "docs_kicker"),
         f"""<div class="docs-layout">
@@ -64,7 +71,7 @@ def _docs_shell(lang: str, active: str, body_html: str, slug: str = "index") -> 
         <div class="nav-foot"><a href="https://github.com/ChiuHuang/caveman-drop">GitHub</a> · <a href="/llms.txt">llms.txt</a></div>
       </mdui-card>
       <mdui-card variant="outlined" class="prose-wrap">
-        {note}<div class="mdui-prose">{body_html}</div>
+        <div class="mdui-prose">{body_html}</div>
       </mdui-card>
     </div>""",
         active="docs",
@@ -80,9 +87,10 @@ async def legal_alias(request: Request):
 
 @router.get("/docs")
 async def docs_index(request: Request):
-    src = _load("index") or "# Docs\n\nMissing docs/index.md"
+    lang = lang_for(request)
+    src = _load("index", lang) or "# Docs\n\nMissing docs/index.md"
     if wants_html(request):
-        return HTMLResponse(_docs_shell(lang_for(request), "index", _md.convert(src), "index"))
+        return HTMLResponse(_docs_shell(lang, "index", _md.convert(src), "index"))
     return PlainTextResponse(src)
 
 
@@ -90,9 +98,10 @@ async def docs_index(request: Request):
 async def docs_page(request: Request, slug: str):
     if slug not in {s for s, _, _ in PAGES}:
         return PlainTextResponse("Doc page not found.", status_code=404)
-    src = _load(slug)
+    lang = lang_for(request)
+    src = _load(slug, lang)
     if src is None:
         return PlainTextResponse("Doc page not found.", status_code=404)
     if wants_html(request):
-        return HTMLResponse(_docs_shell(lang_for(request), slug, _md.convert(src), slug))
+        return HTMLResponse(_docs_shell(lang, slug, _md.convert(src), slug))
     return PlainTextResponse(src)

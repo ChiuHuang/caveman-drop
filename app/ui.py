@@ -35,26 +35,21 @@ def nav_items(lang: str, active: str, authed: bool) -> list[tuple[str, str, str,
 
 
 def legal_footer(lang: str, extra_qs: str = "") -> str:
-    """Bottom-of-page rules line + links, including the legal page (catbox style).
+    """Bottom-of-page links: the legal page, the limits, llms.txt, language switch.
 
     `extra_qs` keeps the current view (e.g. the open folder) when the reader
     switches language.
     """
-    rules = (
-        "僅限合法用途；公開檔案任何人可下載，違規內容直接刪除。"
-        if lang == ZH
-        else "Lawful use only: public files can be downloaded by anyone, offending content is removed."
-    )
-    legal = "法律條款 Legal" if lang == ZH else "Legal"
-    limits = "限制 Limits" if lang == ZH else "Limits"
+    legal = "法律條款" if lang == ZH else "Legal"
+    limits = "限制" if lang == ZH else "Limits"
     return (
         '<footer class="legalbar">'
-        f'<span class="tos-short">{html.escape(rules)}</span>'
         '<span class="legal-links">'
         f'<a href="/legal">{html.escape(legal)}</a>'
         f'<a href="/docs/limits">{html.escape(limits)}</a>'
         '<a href="/llms.txt">llms.txt</a>'
-        f'<a href="?{html.escape(extra_qs)}lang={other(lang)}" title="切換語言 / switch language">'
+        f'<a href="?{html.escape(extra_qs)}lang={other(lang)}"'
+        f' title="{html.escape(t(lang, "lang_switch_tip"))}">'
         f'{html.escape(t(lang, "lang_zh"))}</a>'
         "</span></footer>"
     )
@@ -102,7 +97,7 @@ def page(
     <div style="padding:8px">
       <mdui-list>{"".join(nav_html)}</mdui-list>
       <mdui-divider></mdui-divider>
-      <div class="nav-foot">{html.escape(t(lang, "nav_foot"))}</div>
+      <div class="nav-foot"><a href="/llms.txt">llms.txt</a></div>
     </div>
   </mdui-navigation-drawer>
   <mdui-layout-main>
@@ -244,14 +239,23 @@ def _drop_attrs(scope: str, folder_id: str = "", label: str = "") -> str:
     )
 
 
-def private_file_rows(lang: str, files: list[dict], base: str, scope: str = "private") -> str:
+def private_file_rows(
+    lang: str,
+    files: list[dict],
+    base: str,
+    scope: str = "private",
+    wrap: bool = True,
+) -> str:
     """File list: preview + download + copy + rename + delete, draggable between folders.
 
     Set `dl` on an entry to override the download path (public files live under
     /dl/pub/<folder>/ or /dl/s/, private ones under /dl/), and `rename_post` to
-    `0` / `1` to mark it as a public file for the rename endpoint.
+    `0` / `1` to mark it as a public file for the rename endpoint. `wrap=False`
+    returns bare rows so the caller can put them in one list next to folders.
     """
     if not files:
+        if not wrap:
+            return ""
         return f'<mdui-card variant="filled" class="empty">{html.escape(t(lang, "empty_files"))}</mdui-card>'
     rows = []
     for f in files:
@@ -284,7 +288,8 @@ def private_file_rows(lang: str, files: list[dict], base: str, scope: str = "pri
             + f' data-name="{html.escape(f["name"])}">{html.escape(t(lang, "btn_delete"))}</mdui-button>'
             "</mdui-list-item>"
         )
-    return f'<mdui-list class="file-list">{"".join(rows)}</mdui-list>'
+    body = "".join(rows)
+    return f'<mdui-list class="file-list">{body}</mdui-list>' if wrap else body
 
 
 def sort_bar(lang: str) -> str:
@@ -328,91 +333,86 @@ def _private_upload_form(lang: str, folder_id: str = "") -> str:
           </form>"""
 
 
-def _share_rows(lang: str, fid: str, base: str, shares: dict) -> str:
-    rows = "".join(
-        f'<div class="rlink"><span class="rlink-label">'
-        f'{html.escape(t(lang, "share_view_only" if s.get("mode") == "view" else "share_can_upload"))}</span>'
-        f"<code>{html.escape(base + '/s/' + tok)}</code>"
-        '<span class="rlink-btns">'
-        f'<mdui-button variant="text" data-copy="{html.escape(base + "/s/" + tok)}">'
-        f'{html.escape(t(lang, "btn_copy"))}</mdui-button>'
-        f'<mdui-button variant="text" data-unshare="{html.escape(tok)}">'
-        f'{html.escape(t(lang, "btn_cancel"))}</mdui-button>'
-        "</span></div>"
-        for tok, s in shares.items()
-        if s.get("folder_id") == fid
-    )
-    return f'<div class="sharebox">{rows}</div>' if rows else ""
+def folder_row(
+    lang: str,
+    fid: str,
+    name: str,
+    count: int,
+    ctime: float,
+    base: str,
+    shares: dict,
+    public: bool = False,
+) -> str:
+    """A folder, in the same list as the files.
 
-
-def folder_tile(lang: str, fid: str, name: str, count: int, base: str, shares: dict) -> str:
-    """One folder in the Drive grid: open it, rename it, share it, delete it.
-
-    Also a drop target: a file row dragged here moves in, files dragged from the
-    desktop upload straight into it.
+    Sorts with the files (name / time / size) and is a drop target: a file row
+    dragged here moves in, files dragged from the desktop upload into it.
     """
-    return f"""
-        <div class="ftile" {_drop_attrs("private", fid, name)}>
-          <a class="ftile-open" href="/?folder={html.escape(fid)}">
-            <mdui-icon name="folder" class="ftile-icon"></mdui-icon>
-            <span class="ftile-name">{html.escape(name)}</span>
-            <span class="ftile-sub">{html.escape(t(lang, "drive_items", n=count))}</span>
-          </a>
-          <span class="ftile-btns">
-            <mdui-button-icon icon="edit" data-rename="{html.escape(fid)}" data-name="{html.escape(name)}"
-              data-public="0" title="{html.escape(t(lang, "btn_rename"))}"></mdui-button-icon>
-            <mdui-button-icon icon="link" data-share-create="{html.escape(fid)}" data-mode="view"
-              title="{html.escape(t(lang, "share_view_link"))}"></mdui-button-icon>
-            <mdui-button-icon icon="delete" data-delete-dir="{html.escape(base + "/deldir/" + fid)}"
-              data-name="{html.escape(name)}" data-count="{count}"
-              title="{html.escape(t(lang, "btn_delete"))}"></mdui-button-icon>
-          </span>
-          {_share_rows(lang, fid, base, shares)}
-        </div>"""
+    href = base + "/f/" + fid if public else "/?folder=" + fid
+    if public:
+        btns = (
+            f'<mdui-button-icon icon="open_in_new" data-copy="{html.escape(href)}"'
+            f' title="{html.escape(t(lang, "btn_copy_link"))}"></mdui-button-icon>'
+            f'<mdui-button-icon icon="edit" data-rename="{html.escape(fid)}" data-name="{html.escape(name)}"'
+            f' data-public="1" title="{html.escape(t(lang, "btn_rename"))}"></mdui-button-icon>'
+            f'<mdui-button-icon icon="delete" data-delpubdir="{html.escape(base + "/delpubdir/" + fid)}"'
+            f' data-name="{html.escape(name)}" data-count="{count}"'
+            f' title="{html.escape(t(lang, "btn_delete"))}"></mdui-button-icon>'
+        )
+        scope = "public"
+    else:
+        btns = (
+            f'<mdui-button-icon icon="folder_open" data-open="{html.escape(href)}"'
+            f' title="{html.escape(t(lang, "btn_open"))}"></mdui-button-icon>'
+            f'<mdui-button-icon icon="link" data-share-create="{html.escape(fid)}" data-mode="view"'
+            f' title="{html.escape(t(lang, "share_view_link"))}"></mdui-button-icon>'
+            f'<mdui-button-icon icon="edit" data-rename="{html.escape(fid)}" data-name="{html.escape(name)}"'
+            f' data-public="0" title="{html.escape(t(lang, "btn_rename"))}"></mdui-button-icon>'
+            f'<mdui-button-icon icon="delete" data-delete-dir="{html.escape(base + "/deldir/" + fid)}"'
+            f' data-name="{html.escape(name)}" data-count="{count}"'
+            f' title="{html.escape(t(lang, "btn_delete"))}"></mdui-button-icon>'
+        )
+        scope = "private"
+    return (
+        f'<mdui-list-item class="frow" {_drop_attrs(scope, fid, name)}'
+        f' data-sort-name="{html.escape(name.lower())}" data-sort-time="{float(ctime or 0)}"'
+        f' data-sort-size="0">'
+        '<mdui-icon slot="icon" name="folder"></mdui-icon>'
+        f'<div><a class="fname" href="{html.escape(href)}">{html.escape(name)}</a>'
+        f'<div class="fmeta">{html.escape(t(lang, "drive_items", n=count))}</div></div>'
+        f'<span slot="end-icon" class="frow-btns">{btns}</span>'
+        "</mdui-list-item>"
+    )
 
 
-def public_folder_tile(lang: str, f: dict, base: str) -> str:
-    url = base + "/f/" + f["id"]
-    return f"""
-        <div class="ftile" {_drop_attrs("public", f["id"], f["name"])}>
-          <a class="ftile-open" href="{html.escape(url)}">
-            <mdui-icon name="folder" class="ftile-icon"></mdui-icon>
-            <span class="ftile-name">{html.escape(f["name"])}</span>
-            <span class="ftile-sub">{html.escape(t(lang, "drive_items", n=f["count"]))}</span>
-          </a>
-          <span class="ftile-btns">
-            <mdui-button-icon icon="open_in_new" data-copy="{html.escape(url)}"
-              title="{html.escape(t(lang, "btn_copy_link"))}"></mdui-button-icon>
-            <mdui-button-icon icon="edit" data-rename="{html.escape(f["id"])}" data-name="{html.escape(f["name"])}"
-              data-public="1" title="{html.escape(t(lang, "btn_rename"))}"></mdui-button-icon>
-            <mdui-button-icon icon="delete" data-delpubdir="{html.escape(base + "/delpubdir/" + f["id"])}"
-              data-name="{html.escape(f["name"])}" data-count="{f["count"]}"
-              title="{html.escape(t(lang, "btn_delete"))}"></mdui-button-icon>
-          </span>
-        </div>"""
+def public_folder_row(lang: str, f: dict, base: str) -> str:
+    return folder_row(lang, f["id"], f["name"], f["count"], f.get("ctime", 0), base, {}, public=True)
 
 
-def _drive_toolbar(lang: str, base: str, cur: str, cur_name: str) -> str:
-    """Breadcrumb + New folder + Upload. Doubles as the current-folder drop zone."""
-    crumb = f'<a class="crumb" href="/" {_drop_attrs("private", "", t(lang, "drive_title"))}>{html.escape(t(lang, "drive_title"))}</a>'
+def _drive_head(lang: str, cur: str, cur_name: str, n: int, tools: bool = True) -> str:
+    """Breadcrumb, the list title, and the two action icons — one header row."""
+    root = t(lang, "drive_title")
+    crumb = f'<a class="crumb" href="/" {_drop_attrs("private", "", root)}>{html.escape(root)}</a>'
     if cur:
         crumb += (
-            f'<span class="crumb-sep">/</span><span class="crumb-now">'
-            f'{html.escape(cur_name)}</span>'
+            f'<span class="crumb-sep">/</span><span class="crumb-now">{html.escape(cur_name)}</span>'
         )
+    actions = (
+        '<div class="form-row">'
+        f'<mdui-button-icon icon="create_new_folder" data-new-folder'
+        f' title="{html.escape(t(lang, "drive_new_folder"))}"></mdui-button-icon>'
+        f'<mdui-button-icon icon="cloud_upload" data-drive-upload'
+        f' title="{html.escape(t(lang, "btn_upload"))}"></mdui-button-icon>'
+        "</div>"
+    ) if tools else ""
     return f"""
-        <mdui-card variant="outlined" class="card-pad drivebar" {_drop_attrs("private", cur, cur_name or t(lang, "drive_title"))}>
-          <div class="drivebar-top">
-            <nav class="crumbs">{crumb}</nav>
-            <div class="form-row">
-              <mdui-button-icon icon="create_new_folder" data-new-folder
-                title="{html.escape(t(lang, "drive_new_folder"))}"></mdui-button-icon>
-              <mdui-button-icon icon="cloud_upload" data-drive-upload
-                title="{html.escape(t(lang, "btn_upload"))}"></mdui-button-icon>
+          <div class="drive-head">
+            <div class="drive-head-l">
+              <nav class="crumbs">{crumb}</nav>
+              <h2>{html.escape(t(lang, "drive_files_h", n=n, name=cur_name or root))}</h2>
             </div>
-          </div>
-          <p class="muted drive-hint">{html.escape(t(lang, "drive_hint"))}</p>
-        </mdui-card>"""
+            {actions}
+          </div>"""
 
 
 def drive_panel(
@@ -425,11 +425,12 @@ def drive_panel(
     public: list[dict] | None = None,
     public_folders: list[dict] | None = None,
 ) -> str:
-    """Admin home: the private drive (Google Drive style) plus the public area.
+    """Admin home: the private drive plus the public area, both as one flat list.
 
-    Inside a folder the list shows that folder's files; at the root it shows the
-    uncategorised ones. All folders stay visible as tiles and are drop targets,
-    so a file can be dragged into any of them from anywhere.
+    Folders and files sit in the same list and sort together, the way a file
+    manager shows them. Every folder row is a drop target, so a file can be
+    dragged into any folder from anywhere, and files dragged from the desktop
+    upload straight into the row they land on.
     """
     public = public or []
     public_folders = public_folders or []
@@ -450,15 +451,22 @@ def drive_panel(
     for f in files:
         if f.get("folder"):
             counts[f["folder"]] = counts.get(f["folder"], 0) + 1
-    # the folder you are inside is not in its own listing, like Drive
-    tiles = "".join(
-        folder_tile(lang, fid, m.get("name") or t(lang, "unnamed_folder"), counts.get(fid, 0), base, shares)
+    frows = "".join(
+        folder_row(
+            lang, fid, m.get("name") or t(lang, "unnamed_folder"), counts.get(fid, 0),
+            m.get("ctime", 0), base, shares,
+        )
         for fid, m in folders.items()
         if fid != current
     )
-    no_folders = f'<mdui-card variant="filled" class="empty">{html.escape(t(lang, "drive_no_folders"))}</mdui-card>'
-    pub_tiles = "".join(public_folder_tile(lang, f, base) for f in public_folders)
+    prows = "".join(public_folder_row(lang, f, base) for f in public_folders)
     n_pub = len(public)
+
+    def listing(rows: str) -> str:
+        if not rows:
+            return f'<mdui-card variant="filled" class="empty">{html.escape(t(lang, "empty_files"))}</mdui-card>'
+        return f'<mdui-list class="file-list">{rows}</mdui-list>'
+
     return f"""
         <div class="drive" data-drive>
         <mdui-tabs value="drive" data-tabs>
@@ -467,29 +475,21 @@ def drive_panel(
         </mdui-tabs>
 
         <div data-tabpanel="drive">
-          {_drive_toolbar(lang, base, current, cur_name)}
           {_private_upload_form(lang, current)}
-          <div class="tiles">{tiles}</div>
-          {no_folders if not tiles else ""}
           <mdui-card variant="outlined" class="card-pad"
             {_drop_attrs("private", current, cur_name or t(lang, "drive_title"))}>
-            <h2>{html.escape(t(lang, "drive_files_h", n=len(shown), name=cur_name or t(lang, "drive_title")))}</h2>
+            {_drive_head(lang, current, cur_name, len(frows) + len(shown))}
             {sort_bar(lang)}
-            {private_file_rows(lang, shown, base)}
+            {listing(frows + private_file_rows(lang, shown, base, wrap=False))}
           </mdui-card>
         </div>
 
         <div data-tabpanel="public" hidden>
           {public_upload_form(lang=lang)}
           <mdui-card variant="outlined" class="card-pad">
-            <h2>{html.escape(t(lang, "public_folders_h", n=len(public_folders)))}</h2>
-            <div class="tiles">{pub_tiles}</div>
-            {no_folders if not pub_tiles else ""}
-          </mdui-card>
-          <mdui-card variant="outlined" class="card-pad">
-            <h2>{html.escape(t(lang, "public_files_h", n=n_pub))}</h2>
+            {_drive_head(lang, "", t(lang, "tab_public_short"), len(prows) + n_pub, tools=False)}
             {sort_bar(lang)}
-            {private_file_rows(lang, public, base, scope="public")}
+            {listing(prows + private_file_rows(lang, public, base, scope="public", wrap=False))}
           </mdui-card>
         </div>
         </div>"""
