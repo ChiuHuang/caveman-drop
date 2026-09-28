@@ -356,10 +356,185 @@
     dlg.open = true;
   }
 
+  // ---- 拖放：拖檔案進資料夾、拖檔案列換資料夾、整頁拖放上傳 ----
+  function pickFile(input, file) {
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    input.files = dt.files;
+  }
+
+  function formForScope(scope) {
+    const forms = Array.from(document.querySelectorAll("form[data-chunked]"))
+      .filter((f) => f.offsetParent !== null);   // visible tab only
+    return forms.find((f) => (scope === "public") === f.hasAttribute("data-public")) || null;
+  }
+
+  function visibleScope() {
+    const panel = Array.from(document.querySelectorAll("[data-tabpanel]")).find((p) => !p.hidden);
+    return panel && panel.querySelector('form[data-chunked][data-public]') ? "public" : "private";
+  }
+
+  function setTargetFolder(form, scope, folderId) {
+    if (scope === "public") {
+      const field = form.querySelector('[name="folder"]');
+      if (field) {
+        if (field.tagName.toLowerCase() === "input") field.value = folderId;
+        else field.value = folderId;
+      }
+      return;
+    }
+    const sel = form.querySelector('[name="folder_id"]');
+    if (sel) sel.value = folderId || "";
+  }
+
+  async function uploadDropped(files, scope, folderId, label) {
+    const form = formForScope(scope);
+    if (!form) { window.toast("先切到可以上傳的分頁"); return; }
+    const input = form.querySelector('input[type="file"]');
+    setTargetFolder(form, scope, folderId);
+    const list = Array.from(files);
+    for (let i = 0; i < list.length; i++) {
+      if (list.length > 1) window.toast(`上傳 ${i + 1}/${list.length}：${list[i].name}`);
+      pickFile(input, list[i]);
+      await chunkedUpload(form);
+    }
+    if (list.length > 1) window.location.reload();
+    else if (label) window.toast(`已上傳到 ${label}`);
+  }
+
+  async function moveDropped(fileId, scope, folderId, label, fromFolder) {
+    const url = scope === "public" ? "/api/public/move" : "/api/files/move";
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          file_id: fileId,
+          folder_id: folderId || null,
+          from_folder_id: fromFolder || null,
+        }),
+      });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      window.toast(label ? `已移到 ${label}` : "已移出資料夾");
+      window.location.reload();
+    } catch { window.toast("移動失敗"); }
+  }
+
+  const MOVE_MIME = "application/x-caveman-move";
+
+  function installDragDrop() {
+    const root = document.querySelector("[data-droproot]");
+    if (!root) return;
+    const hint = root.querySelector("[data-drophint]");
+
+    // TOS strip: dismiss once
+    const tos = root.querySelector("[data-tos]");
+    if (tos) {
+      if (localStorage.getItem("tos_hidden") === "1") tos.remove();
+      else {
+        const close = tos.querySelector("[data-tos-close]");
+        if (close) close.addEventListener("click", () => {
+          tos.remove();
+          localStorage.setItem("tos_hidden", "1");
+        });
+      }
+    }
+
+    const highlight = (el, on) => {
+      if (!el) return;
+      el.classList.toggle("dragover", on);
+      if (hint) hint.hidden = !on;
+    };
+
+    // dragging an existing file row out of a list
+    root.addEventListener("dragstart", (ev) => {
+      const row = ev.target.closest ? ev.target.closest("[data-move]") : null;
+      if (!row) return;
+      const payload = JSON.stringify({
+        kind: "move",
+        id: row.getAttribute("data-move"),
+        scope: row.getAttribute("data-scope"),
+        from: row.getAttribute("data-from") || "",
+        name: row.getAttribute("data-name"),
+      });
+      ev.dataTransfer.setData(MOVE_MIME, payload);
+      ev.dataTransfer.setData("text/plain", row.getAttribute("data-name") || "");
+      ev.dataTransfer.effectAllowed = "move";
+      row.classList.add("dragging");
+    });
+    root.addEventListener("dragend", (ev) => {
+      const row = ev.target.closest ? ev.target.closest("[data-move]") : null;
+      if (row) row.classList.remove("dragging");
+      root.querySelectorAll(".dragover").forEach((el) => el.classList.remove("dragover"));
+      if (hint) hint.hidden = true;
+    });
+
+    root.addEventListener("dragover", (ev) => {
+      if (!hasFiles(ev)) return;
+      ev.preventDefault();
+      const target = ev.target.closest ? ev.target.closest("[data-dropscope]") : null;
+      ev.dataTransfer.dropEffect = target && scopeOf(target) === "private" ? "copy" : "copy";
+      root.querySelectorAll(".dragover").forEach((el) => el.classList.remove("dragover"));
+      highlight(target, true);
+      if (hint) hint.textContent = target ? dropLabel(target) : "放開手上傳";
+    });
+
+    root.addEventListener("dragleave", (ev) => {
+      const target = ev.target.closest ? ev.target.closest("[data-dropscope]") : null;
+      if (target && !target.contains(ev.relatedTarget)) highlight(target, false);
+    });
+
+    root.addEventListener("drop", async (ev) => {
+      if (!hasFiles(ev)) return;
+      ev.preventDefault();
+      const target = ev.target.closest ? ev.target.closest("[data-dropscope]") : null;
+      root.querySelectorAll(".dragover").forEach((el) => el.classList.remove("dragover"));
+      if (hint) hint.hidden = true;
+      const move = readMove(ev);
+      if (target) {
+        const scope = scopeOf(target) || (target.getAttribute("data-dropscope") || "private");
+        const folderId = target.getAttribute("data-dropfolder") || "";
+        const label = target.getAttribute("data-droplabel") || "";
+        if (move && ev.dataTransfer.files.length === 0) {
+          if ((move.scope || scope) !== scope) { window.toast("不能跨公開／私人移動"); return; }
+          return moveDropped(move.id, scope, folderId, label, move.from);
+        }
+        return uploadDropped(ev.dataTransfer.files, scope, folderId, label);
+      }
+      // dropped on empty page space: whichever upload form is on screen
+      return uploadDropped(ev.dataTransfer.files, visibleScope(), "", "");
+    });
+
+    function hasFiles(ev) {
+      const types = ev.dataTransfer && ev.dataTransfer.types;
+      if (!types) return false;
+      return Array.from(types).includes("Files") || hasMove(ev);
+    }
+    function hasMove(ev) {
+      return ev.dataTransfer && Array.from(ev.dataTransfer.types || []).includes(MOVE_MIME);
+    }
+    function readMove(ev) {
+      const raw = ev.dataTransfer.getData(MOVE_MIME);
+      if (!raw) return null;
+      try { return JSON.parse(raw); } catch { return null; }
+    }
+    function scopeOf(el) {
+      const s = el.getAttribute("data-dropscope");
+      return s === "public" || s === "private" ? s : null;
+    }
+    function dropLabel(el) {
+      const label = el.getAttribute("data-droplabel");
+      const folder = el.getAttribute("data-dropfolder");
+      return label ? `放到「${label}」` : folder ? "放到這個資料夾" : "放開手上傳";
+    }
+  }
+
   ready(() => {
     const drawer = document.getElementById("nav-drawer");
     const toggle = document.getElementById("nav-toggle");
     if (toggle && drawer) toggle.addEventListener("click", () => { drawer.open = !drawer.open; });
+
+    installDragDrop();
 
     const themeBtn = document.getElementById("theme-toggle");
     if (themeBtn) themeBtn.addEventListener("click", () => {
@@ -381,19 +556,34 @@
       if (pv) preview(pv.getAttribute("data-preview"), pv.getAttribute("data-name") || "");
     });
 
-    // 上傳 / 建資料夾頁籤
+    // 上傳 / 建資料夾頁籤（只看同一層的 panel，避免蓋掉巢狀頁籤）
     document.querySelectorAll("[data-tabs]").forEach((tabs) => {
       const root = tabs.parentElement;
+      if (!root) return;
+      const panels = Array.from(root.children).filter((el) => el.hasAttribute("data-tabpanel"));
       const show = (v) => {
         try { tabs.value = v; } catch {}
-        root.querySelectorAll("[data-tabpanel]").forEach((p) => { p.hidden = p.getAttribute("data-tabpanel") !== v; });
+        panels.forEach((p) => { p.hidden = p.getAttribute("data-tabpanel") !== v; });
       };
-      tabs.querySelectorAll("mdui-tab").forEach((t) => t.addEventListener("click", () => show(t.getAttribute("value"))));
+      tabs.querySelectorAll("mdui-tab").forEach((t) =>
+        t.addEventListener("click", () => show(t.getAttribute("value"))));
+      show(tabs.getAttribute("value") || (tabs.querySelector("mdui-tab") || {}).getAttribute?.("value"));
     });
 
-    // 分段上傳（公開 + 私人共用，data-merge 指向各自合併端點）
+    // 分段上傳（公開 + 私人共用，data-merge 指向各自合併端點）；可一次選多個檔
     document.querySelectorAll("form[data-chunked]").forEach((form) => {
-      form.addEventListener("submit", (ev) => { ev.preventDefault(); chunkedUpload(form); });
+      form.addEventListener("submit", async (ev) => {
+        ev.preventDefault();
+        const input = form.querySelector('input[type="file"]');
+        const files = Array.from((input && input.files) || []);
+        if (!files.length) { window.toast("請先選擇檔案"); return; }
+        for (let i = 0; i < files.length; i++) {
+          if (files.length > 1) window.toast(`上傳 ${i + 1}/${files.length}：${files[i].name}`);
+          pickFile(input, files[i]);
+          await chunkedUpload(form);
+        }
+        if (files.length > 1) window.location.reload();
+      });
     });
 
     // 並行下載
@@ -464,13 +654,32 @@
       });
     });
 
-    // 刪除確認
-    document.querySelectorAll("[data-delete]").forEach((btn) => {
+    // 刪除公開資料夾（管理員）
+    document.querySelectorAll("[data-delpubdir]").forEach((btn) => {
       btn.addEventListener("click", () => {
         const name = btn.getAttribute("data-name") || "";
-        if (window.confirm(`確定要刪除「${name}」嗎？此動作無法復原。`)) {
-          window.location.href = btn.getAttribute("data-delete");
+        const count = btn.getAttribute("data-count") || "0";
+        if (window.confirm(`確定刪除公開資料夾「${name}」（含 ${count} 個檔案）嗎？`)) {
+          window.location.href = btn.getAttribute("data-delpubdir");
         }
+      });
+    });
+
+    // 刪除確認
+    document.querySelectorAll("[data-delete]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const name = btn.getAttribute("data-name") || "";
+        if (!window.confirm(`確定要刪除「${name}」嗎？此動作無法復原。`)) return;
+        if (btn.hasAttribute("data-delete-post")) {
+          try {
+            const res = await fetch(btn.getAttribute("data-delete"), { method: "POST" });
+            if (!res.ok) throw new Error("HTTP " + res.status);
+            window.toast("已刪除");
+            window.location.reload();
+          } catch { window.toast("刪除失敗"); }
+          return;
+        }
+        window.location.href = btn.getAttribute("data-delete");
       });
     });
 
@@ -491,8 +700,8 @@
 
     // 檔案排序：時間 / 大小 / 名稱
     document.querySelectorAll("[data-sortbar]").forEach((bar) => {
-      const card = bar.closest(".card-pad");
-      const list = card ? card.querySelector("mdui-list") : null;
+      const host = bar.closest(".card-pad") || bar.parentElement;
+      const list = host ? host.querySelector("mdui-list") : null;
       if (!list) return;
       const btns = bar.querySelectorAll("[data-sort-by]");
       const dirBtn = bar.querySelector("[data-sort-dir]");

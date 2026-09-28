@@ -74,6 +74,26 @@ pre.curl code, .mdui-prose pre code { background: transparent; color: inherit; p
 mdui-card { --mdui-shape-corner-medium: 16px; }
 .dropzone { border: 2px dashed rgba(127,127,127,.5); border-radius: 16px; padding: 32px; text-align: center; cursor: pointer; }
 .dropzone.dragover { border-color: rgb(var(--mdui-color-primary)); background: rgba(127,127,127,.08); }
+/* 拖放上傳 */
+.tos {
+  display: flex; align-items: center; gap: 8px; font-size: .82rem; opacity: .75;
+  border: 1px solid rgba(127,127,127,.3); border-radius: 10px;
+  padding: 6px 8px 6px 12px; margin-bottom: 12px;
+}
+.tos span { flex: 1 1 auto; }
+.drophint {
+  position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+  background: rgb(var(--mdui-color-primary)); color: rgb(var(--mdui-color-on-primary));
+  padding: 10px 22px; border-radius: 999px; font-weight: 700; z-index: 20;
+  box-shadow: 0 6px 20px rgba(0,0,0,.25); pointer-events: none;
+}
+[data-dropscope] { transition: outline-color .12s, background-color .12s; }
+[data-dropscope].dragover { outline: 2px dashed rgb(var(--mdui-color-primary)); outline-offset: 3px; background: rgba(127,127,127,.07); }
+mdui-list-item[draggable="true"] { cursor: grab; }
+mdui-list-item[draggable="true"]:active { cursor: grabbing; }
+mdui-list-item.dragging { opacity: .45; }
+.fcard h2 { display: flex; align-items: center; gap: 6px; }
+.fcard .sharebox:empty { display: none; }
 .docs-layout { display: grid; grid-template-columns: 240px 1fr; gap: 16px; }
 @media (max-width: 720px) { .docs-layout { grid-template-columns: 1fr; } }
 .docs-nav { position: sticky; top: 16px; align-self: start; }

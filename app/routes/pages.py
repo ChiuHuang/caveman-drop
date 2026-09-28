@@ -18,7 +18,9 @@ from ..storage import (
     get_private_folders,
     get_shares,
     private_files,
+    public_files,
     public_folder_files,
+    public_folder_list,
     public_folder_name,
     short_code,
 )
@@ -31,20 +33,22 @@ router = APIRouter()
 def _dashboard_html(request: Request, authed: bool) -> str:
     base = base_url(request)
     if authed:
-        files = private_files()
         return page(
             "私人模式",
             f"""
         <mdui-card variant="filled" class="card-pad hero">
           <h1>私人模式</h1>
-          <p>已登入 — 這裡只有你的私人檔案，不會顯示公開上傳。</p>
+          <p>已登入</p>
           <div class="form-row">
             <a href="/api/files"><mdui-button variant="outlined">檔案 API</mdui-button></a>
             <a href="/logout"><mdui-button variant="text">登出</mdui-button></a>
           </div>
         </mdui-card>
         <div class="stack">
-          {private_panel(files, base, get_private_folders(), get_shares())}
+          {private_panel(
+            private_files(), base, get_private_folders(), get_shares(),
+            public_files(), public_folder_list(),
+          )}
         </div>""",
             active="home",
             authed=True,
@@ -57,18 +61,13 @@ def _dashboard_html(request: Request, authed: bool) -> str:
           <p>免帳號的匿名檔案分享。傳檔後立刻拿到永久連結。</p>
           <div class="form-row">
             <a href="/docs"><mdui-button variant="text">使用文件</mdui-button></a>
+            <a href="/login"><mdui-button variant="outlined">登入</mdui-button></a>
           </div>
         </mdui-card>
         <div class="stack">
           <mdui-card variant="outlined" class="card-pad">
             <h2>公開上傳</h2>
-            <p class="muted">免帳號，上傳後立刻拿到永久連結。</p>
             {public_upload_form()}
-          </mdui-card>
-          <mdui-card variant="outlined" class="card-pad">
-            <h2>私人空間</h2>
-            <p>登入後可使用私人檔案清單、預覽與刪除，不受分享頻寬限速影響。</p>
-            <a href="/login"><mdui-button>登入</mdui-button></a>
           </mdui-card>
         </div>""",
         active="home",

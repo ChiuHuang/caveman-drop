@@ -258,16 +258,16 @@ def _scan_public_hashes() -> dict[str, str]:
     """Every public sha256 on disk — the source of truth when the index is lost."""
     found: dict[str, str] = {}
     roots = [settings.single_dir] + [
-        os.path.join(settings.public_dir, d) for d in _safe_listdir(settings.public_dir)
+        os.path.join(settings.public_dir, d) for d in listdir_safe(settings.public_dir)
     ]
     for root in roots:
-        for fn in _safe_listdir(root):
+        for fn in listdir_safe(root):
             if fn.endswith(".json") and HASH_ID_RE.fullmatch(fn[:-5]):
                 found[fn[:-5]] = ""
     return found
 
 
-def _safe_listdir(path: str) -> list[str]:
+def listdir_safe(path: str) -> list[str]:
     try:
         return os.listdir(path)
     except OSError:
@@ -363,7 +363,7 @@ def public_file_by_id(file_id: str) -> tuple[str, dict[str, Any]] | None:
     meta = public_entry(settings.single_dir, file_id)
     if meta is not None:
         return settings.single_dir, meta
-    for folder in _safe_listdir(settings.public_dir):
+    for folder in listdir_safe(settings.public_dir):
         d = os.path.join(settings.public_dir, folder)
         meta = public_entry(d, file_id)
         if meta is not None:
@@ -468,6 +468,19 @@ def entry_meta(dirname: str, file_id: str) -> dict[str, Any] | None:
     return meta
 
 
+def _entry_view(file_id: str, meta: dict[str, Any]) -> dict[str, Any]:
+    """Common listing fields for one file entry."""
+    return {
+        "id": file_id,
+        "name": meta.get("filename", file_id),
+        "description": meta.get("description", ""),
+        "ext": meta.get("ext", ""),
+        "size": meta.get("size", 0),
+        "ctime": meta.get("ctime", 0),
+        "content_type": meta.get("content_type") or "application/octet-stream",
+    }
+
+
 def public_folder_files(folder_id: str) -> list[dict[str, Any]]:
     d = public_folder_dir(folder_id)
     out: list[dict[str, Any]] = []
@@ -478,25 +491,89 @@ def public_folder_files(folder_id: str) -> list[dict[str, Any]]:
             continue
         fid = fn[:-5]
         meta = entry_meta(d, fid)
-        if meta is None:
+        if meta is not None:
+            out.append(_entry_view(fid, meta))
+    out.sort(key=lambda x: x["ctime"], reverse=True)
+    return out
+
+
+def public_folder_list() -> list[dict[str, Any]]:
+    """Every public folder with its file count (admin view)."""
+    out = []
+    for d in listdir_safe(settings.public_dir):
+        if not os.path.isdir(os.path.join(settings.public_dir, d)):
             continue
+        files = public_folder_files(d)
+        ctime = 0.0
+        try:
+            ctime = os.path.getctime(os.path.join(settings.public_dir, d))
+        except OSError:
+            pass
         out.append(
             {
-                "id": fid,
-                "name": meta["filename"],
-                "description": meta.get("description", ""),
-                "ext": meta.get("ext", ""),
-                "size": meta["size"],
-                "ctime": meta["ctime"],
-                "content_type": meta.get(
-                    "content_type",
-                    mimetypes.guess_type(meta.get("filename", ""))[0]
-                    or "application/octet-stream",
-                ),
+                "id": d,
+                "name": public_folder_name(d) or "未命名資料夾",
+                "count": len(files),
+                "size": sum(f["size"] for f in files),
+                "ctime": max([ctime] + [f["ctime"] for f in files]),
             }
         )
     out.sort(key=lambda x: x["ctime"], reverse=True)
     return out
+
+
+def public_files() -> list[dict[str, Any]]:
+    """Every public file — folderless singles plus all folders, newest first."""
+    out: list[dict[str, Any]] = []
+    for fn in listdir_safe(settings.single_dir):
+        if not fn.endswith(".json"):
+            continue
+        fid = fn[:-5]
+        meta = entry_meta(settings.single_dir, fid)
+        if meta is not None:
+            out.append({**_entry_view(fid, meta), "folder_id": "", "folder_name": ""})
+    for d in listdir_safe(settings.public_dir):
+        if not os.path.isdir(os.path.join(settings.public_dir, d)):
+            continue
+        for f in public_folder_files(d):
+            out.append({**f, "folder_id": d, "folder_name": public_folder_name(d)})
+    out.sort(key=lambda x: x["ctime"], reverse=True)
+    return out
+
+
+def move_entry(dirname: str, file_id: str, folder_id: str | None) -> bool:
+    """Point an existing entry at another folder (drag and drop)."""
+    meta = entry_meta(dirname, file_id)
+    if meta is None:
+        return False
+    meta["folder"] = folder_id or None
+    save_entry(dirname, file_id, meta)
+    return True
+
+
+def delete_public_folder(folder_id: str) -> int:
+    """Remove a public folder and every entry in it."""
+    d = public_folder_dir(folder_id)
+    if not os.path.isdir(d):
+        raise HTTPException(404, "Folder not found")
+    n = 0
+    for fn in os.listdir(d):
+        if not fn.endswith(".json") or fn == "folder.json":
+            continue
+        if delete_file_entry(d, fn[:-5]):
+            n += 1
+    for token, s in list(get_shares().items()):
+        if s.get("folder_id") == folder_id:
+            revoke_share(token)
+    try:
+        os.remove(os.path.join(d, "folder.json"))
+    except OSError:
+        pass
+    try:
+        os.rmdir(d)
+    except OSError:
+        pass
+    return n
 
 
 def private_files() -> list[dict[str, Any]]:
@@ -515,12 +592,9 @@ def private_files() -> list[dict[str, Any]]:
         fid_folder = meta.get("folder")
         files.append(
             {
-                "id": fid,
-                "name": meta["filename"],
-                "description": meta.get("description", ""),
-                "size": size // 1024,
+                **_entry_view(fid, meta),
+                "size": size // 1024,  # legacy KB value used by the private UI
                 "bytes": size,
-                "ctime": meta["ctime"],
                 "folder": fid_folder,
                 "folder_name": (folders.get(fid_folder) or {}).get("name", "") if fid_folder else "",
             }

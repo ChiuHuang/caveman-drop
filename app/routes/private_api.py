@@ -29,13 +29,20 @@ from ..storage import (
     create_share,
     delete_file_entry,
     delete_private_folder,
+    delete_public_folder,
     entry_meta,
+    forget_short_code,
     get_private_folders,
     get_share,
     get_shares,
+    listdir_safe,
+    move_entry,
     payload_path,
     private_files,
     probe_check,
+    public_files,
+    public_folder_files,
+    public_folder_list,
     revoke_share,
     save_entry,
     speed_probe,
@@ -72,6 +79,17 @@ class ShareMergePayload(BaseModel):
     filename: str
     total_chunks: int
     token: str
+
+
+class MovePayload(BaseModel):
+    file_id: str
+    folder_id: Optional[str] = None
+    from_folder_id: Optional[str] = None
+
+
+def _need_admin(request: Request) -> None:
+    if not request.session.get("auth"):
+        raise HTTPException(401, "Login required")
 
 
 def _check_private(request: Request) -> None:
@@ -409,6 +427,96 @@ async def api_files(request: Request):
             authed=True,
         )
     )
+
+
+@router.post("/api/files/move")
+async def move_private_file(request: Request, payload: MovePayload):
+    """Drag and drop: move a private file into another folder (or out of one)."""
+    _need_admin(request)
+    folder_id = payload.folder_id or None
+    if folder_id and folder_id not in get_private_folders():
+        raise HTTPException(404, "Folder not found")
+    if not move_entry(settings.upload_dir, payload.file_id, folder_id):
+        raise HTTPException(404, "File not found")
+    return {"success": True, "file_id": payload.file_id, "folder_id": folder_id}
+
+
+@router.get("/api/public/files")
+async def list_all_public(request: Request):
+    """Admin view: every public file and folder in one list."""
+    _need_admin(request)
+    return {
+        "files": public_files(),
+        "folders": public_folder_list(),
+    }
+
+
+@router.post("/api/public/move")
+async def move_public_file(request: Request, payload: MovePayload):
+    """Drag and drop: move a public file to another public folder.
+
+    The same bytes can sit in more than one public folder, so the source folder
+    comes from the row that was dragged; without it we fall back to a search.
+    """
+    _need_admin(request)
+    src = ""
+    if payload.from_folder_id:
+        cand = os.path.join(settings.public_dir, payload.from_folder_id)
+        if os.path.isdir(cand) and os.path.exists(os.path.join(cand, payload.file_id + ".json")):
+            src = cand
+    if not src:
+        for d in listdir_safe(settings.public_dir):
+            cand = os.path.join(settings.public_dir, d)
+            if os.path.isdir(cand) and os.path.exists(os.path.join(cand, payload.file_id + ".json")):
+                src = cand
+                break
+    if not src and os.path.exists(os.path.join(settings.single_dir, payload.file_id + ".json")):
+        src = settings.single_dir
+    if not src:
+        raise HTTPException(404, "File not found")
+    target = settings.single_dir
+    if payload.folder_id:
+        cand = os.path.join(settings.public_dir, payload.folder_id)
+        if not os.path.isdir(cand):
+            raise HTTPException(404, "Folder not found")
+        target = cand
+    meta = entry_meta(src, payload.file_id)
+    if meta is None:
+        raise HTTPException(404, "File not found")
+    meta.pop("size", None)
+    meta.pop("ctime", None)
+    save_entry(target, payload.file_id, meta)
+    try:
+        os.remove(os.path.join(src, payload.file_id + ".json"))
+    except OSError:
+        pass
+    return {"success": True, "file_id": payload.file_id, "folder_id": payload.folder_id or ""}
+
+
+@router.post("/delpub/{file_id}")
+async def delete_public_file(request: Request, file_id: str):
+    """Remove this file everywhere it is shared publicly (bytes stay if private)."""
+    _need_admin(request)
+    n = 0
+    roots = [settings.single_dir] + [
+        os.path.join(settings.public_dir, d) for d in listdir_safe(settings.public_dir)
+    ]
+    for root in roots:
+        if os.path.exists(os.path.join(root, file_id + ".json")) and delete_file_entry(root, file_id):
+            n += 1
+    if n:
+        forget_short_code(file_id)
+        return {"success": True, "deleted": n}
+    raise HTTPException(404, "File not found")
+
+
+@router.post("/delpubdir/{folder_id}")
+async def delpub_folder(request: Request, folder_id: str):
+    _need_admin(request)
+    for f in public_folder_files(folder_id):
+        forget_short_code(f["id"])
+    n = delete_public_folder(folder_id)
+    return {"success": True, "deleted_files": n}
 
 
 @router.get("/dl/{file_id}")

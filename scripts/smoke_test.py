@@ -36,8 +36,10 @@ print("llms OK")
 
 r = c.get("/upload", headers=B)
 assert "data-chunked" in r.text and "data-tp-segs" in r.text
-assert "先說好" in r.text
+assert "單檔上限 5 GB" in r.text and "超量自動降速。" in r.text
+assert "先說好" not in r.text
 assert "建立資料夾" in r.text and "data-tabs" in r.text
+assert "留空＝只給單檔永久連結" not in r.text, "helper copy should stay out of the way"
 print("browser /upload OK (thread panel present)")
 
 r = c.get("/docs", headers=B)
@@ -309,8 +311,12 @@ print("login OK")
 
 r = c.get("/", headers=B)
 assert "私人模式" in r.text and "data-chunked" in r.text
-assert "/api/public/chunk" not in r.text, "public upload must be hidden when logged in"
-print("private-mode dashboard OK")
+assert "已登入" in r.text and "不會顯示公開上傳" not in r.text
+# admin sees private + public in tabs, and drag targets everywhere
+assert 'value="all"' in r.text and 'value="public"' in r.text and 'value="folders"' in r.text
+assert "data-tos" in r.text, "top TOS strip"
+assert "public upload form" not in r.text
+print("private-mode dashboard OK (admin tabs, all files, drop targets)")
 
 r = c.get("/upload", headers=B, follow_redirects=False)
 assert r.status_code == 303, "logged-in /upload should redirect to /"
@@ -362,7 +368,10 @@ fl = c.get("/api/folders", headers=J)
 assert any(x["id"] == pfolder and x["count"] == 1 for x in fl.json()["folders"])
 r = c.get("/", headers=B)
 assert "工作" in r.text and "data-delete-dir" in r.text and "未分類" in r.text
-assert "建立檢視連結" in r.text and "建立上傳連結" in r.text
+assert "檢視連結" in r.text and "上傳連結" in r.text
+assert 'data-dropfolder="%s"' % pfolder in r.text, "folder card must be a drop target"
+assert 'data-dropscope="private"' in r.text and 'data-move=' in r.text
+assert "draggable=\"true\"" in r.text, "file rows must be draggable"
 
 # --- share folder: view-only vs upload ---
 sv = c.post(f"/api/folders/{pfolder}/share", headers=J, json={"mode": "view"})
@@ -410,6 +419,46 @@ print("private folders OK")
 v = c.get(f"/view/{priv_id}", headers=J)
 assert v.status_code == 200
 print("preview view OK")
+
+# --- admin sees everything: /api/public/files lists singles + folder files ---
+allpub = c.get("/api/public/files", headers=J)
+assert allpub.status_code == 200, allpub.text
+names = {f["name"] for f in allpub.json()["files"]}
+assert {"hello.txt", "j.txt"} <= names, names
+assert any(f["name"] == "派對" for f in allpub.json()["folders"])
+anon = TestClient(app)                    # no session cookie: must be refused
+r = anon.get("/api/public/files", headers=B)
+assert r.status_code in (401, 303), r.status_code
+assert anon.post("/api/public/move", json={"file_id": "x", "folder_id": None}).status_code == 401
+assert anon.post(f"/delpub/{fid}").status_code == 401
+print("admin file list OK")
+
+# --- drag and drop: move a public file into a public folder, and out again ---
+pub_fid = f.json()["file_id"]          # hello.txt, folderless
+target = c.post("/api/public/folder", headers=J, json={"name": "拖放目標"}).json()["folder_id"]
+mv = c.post("/api/public/move", headers=J,
+            json={"file_id": pub_fid, "folder_id": target, "from_folder_id": ""})
+assert mv.status_code == 200 and mv.json()["folder_id"] == target, mv.text
+assert c.get(f"/dl/pub/{target}/{pub_fid}", headers=J).content == b"hi caveman"
+assert any(f["id"] == pub_fid for f in c.get(f"/api/public/folder/{target}", headers=J).json()["files"])
+back = c.post("/api/public/move", headers=J,
+              json={"file_id": pub_fid, "folder_id": None, "from_folder_id": target})
+assert back.status_code == 200 and back.json()["folder_id"] == ""
+assert c.get(f"/dl/s/{pub_fid}", headers=J).content == b"hi caveman"
+print("public drag-move OK")
+
+# private move + admin deletes of public entries
+pv = c.post("/api/files/move", headers=J, json={"file_id": priv_id, "folder_id": None})
+assert pv.status_code == 200
+assert c.post("/api/public/move", headers=J, json={"file_id": priv_id, "folder_id": target}).status_code == 404
+dp = c.post(f"/delpub/{jfid}", headers=J)
+assert dp.status_code == 200 and dp.json()["deleted"] >= 1
+assert c.get(f"/dl/pub/{folder}/{jfid}", headers=J).status_code == 404
+dd = c.post(f"/delpubdir/{target}", headers=J)
+assert dd.status_code == 200
+assert c.get(f"/f/{target}", headers={**B}).status_code == 404
+assert c.post("/delpub/does-not-exist", headers=J).status_code == 404
+print("admin public delete OK")
 
 # --- private uncapped assemble + sha256 id OK (already printed above) ---
 # --- private merge uncapped: tiny cap rejects, None assembles ---
