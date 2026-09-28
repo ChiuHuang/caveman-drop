@@ -39,8 +39,11 @@ from ..storage import (
     public_folder_dir,
     public_folder_files,
     public_folder_name,
+    public_file_by_id,
     resolve_public_folder,
+    resolve_short_code,
     save_entry,
+    short_code,
     single_blob,
     single_meta,
     speed_probe,
@@ -63,6 +66,7 @@ class PublicMergePayload(BaseModel):
     filename: str
     total_chunks: int
     folder: Optional[str] = None
+    description: str = ""
 
 
 async def _receive_to_bin(
@@ -111,7 +115,7 @@ async def _receive_to_bin(
         await file.close()
 
 
-def _file_meta(original_name: str, size: int) -> dict:
+def _file_meta(original_name: str, size: int, description: str = "") -> dict:
     _, ext = os.path.splitext(original_name)
     ext = ext[:32] if re.fullmatch(r"\.[A-Za-z0-9._-]+", ext or "") else ""
     return {
@@ -119,7 +123,14 @@ def _file_meta(original_name: str, size: int) -> dict:
         "ext": ext,
         "content_type": mimetypes.guess_type(original_name)[0] or "application/octet-stream",
         "size": size,
+        "description": clean_name(description, 200),
     }
+
+
+def _short_url(base: str, file_id: str, ext: str) -> str:
+    """catbox-style share link: /usercontent/<short code>.<ext> (CDN-cacheable)."""
+    code = short_code(file_id)
+    return f"{base}/usercontent/{code}{ext}" if code else ""
 
 
 @router.post("/api/public/upload")
@@ -127,21 +138,25 @@ async def public_upload(
     request: Request,
     file: UploadFile = File(...),
     folder: Optional[str] = Form(None),
+    description: Optional[str] = Form(None),
 ):
     """Anonymous upload. No folder = single direct file, no folder created.
 
     `file_id` is the sha256 of the content, so the same file always gets the same
     id and link. `folder` accepts an existing folder id or a free-text name
-    (which creates a new folder named after it).
+    (which creates a new folder named after it). `description` is optional free
+    text shown next to the file.
     """
     ip = client_ip(request)
     check_rate_limit(ip)
 
     if folder:
-        return await _upload_to_folder(request, ip, file, resolve_public_folder(folder))
+        return await _upload_to_folder(
+            request, ip, file, resolve_public_folder(folder), description
+        )
 
     original_name = os.path.basename(file.filename or "unnamed") or "unnamed"
-    meta = _file_meta(original_name, 0)
+    meta = _file_meta(original_name, 0, description or "")
     fid, written, deduped = await _receive_to_bin(file, ip, None)
     meta["size"] = written
     meta["content_type"] = file.content_type or meta["content_type"]
@@ -153,16 +168,20 @@ async def public_upload(
         "success": True,
         "file_id": fid,
         "filename": original_name,
+        "description": meta["description"],
         "size_bytes": written,
         "content_type": meta["content_type"],
         "deduplicated": deduped,
+        "short_url": _short_url(base, fid, meta["ext"]),
         "url": download_url,
         "download_url": download_url,
         "file_api_url": f"{base}/api/public/single/{fid}",
     }
 
 
-async def _upload_to_folder(request: Request, ip: str, file: UploadFile, folder: str):
+async def _upload_to_folder(
+    request: Request, ip: str, file: UploadFile, folder: str, description: str = ""
+):
     folder_id = folder
     validate_public_id(folder_id, "folder id")
     fdir = public_folder_dir(folder_id)
@@ -179,7 +198,7 @@ async def _upload_to_folder(request: Request, ip: str, file: UploadFile, folder:
             )
 
         original_name = os.path.basename(file.filename or "unnamed") or "unnamed"
-        meta = _file_meta(original_name, 0)
+        meta = _file_meta(original_name, 0, description or "")
         fid, written, deduped = await _receive_to_bin(file, ip, folder_id)
         meta["size"] = written
         meta["content_type"] = file.content_type or meta["content_type"]
@@ -194,9 +213,11 @@ async def _upload_to_folder(request: Request, ip: str, file: UploadFile, folder:
         "folder_name": public_folder_name(folder_id),
         "file_id": fid,
         "filename": original_name,
+        "description": meta["description"],
         "size_bytes": written,
         "content_type": meta["content_type"],
         "deduplicated": deduped,
+        "short_url": _short_url(base, fid, meta["ext"]),
         "url": download_url,
         "download_url": download_url,
         "folder_url": folder_url,
@@ -260,6 +281,7 @@ async def public_merge_chunks(request: Request, payload: PublicMergePayload):
     """Assemble a public chunked upload. No folder = single direct file.
 
     `folder` is an existing folder id or a free-text name for a new folder.
+    `description` is optional free text stored with the file.
     """
     ip = client_ip(request)
     check_rate_limit(ip)
@@ -271,7 +293,13 @@ async def public_merge_chunks(request: Request, payload: PublicMergePayload):
     cdir = os.path.join(settings.tmp_dir, f"pub_{payload.upload_id}")
     content_type = mimetypes.guess_type(original_name)[0] or "application/octet-stream"
     base = base_url(request)
-    entry = {"filename": original_name, "ext": ext, "content_type": content_type}
+    description = clean_name(payload.description, 200)
+    entry = {
+        "filename": original_name,
+        "ext": ext,
+        "content_type": content_type,
+        "description": description,
+    }
 
     if payload.folder:
         folder_id = resolve_public_folder(payload.folder)
@@ -291,8 +319,10 @@ async def public_merge_chunks(request: Request, payload: PublicMergePayload):
             "folder_name": public_folder_name(folder_id),
             "file_id": fid,
             "filename": original_name,
+            "description": description,
             "size_bytes": written,
             "content_type": content_type,
+            "short_url": _short_url(base, fid, ext),
             "url": download_url,
             "download_url": download_url,
             "folder_url": folder_url,
@@ -309,12 +339,42 @@ async def public_merge_chunks(request: Request, payload: PublicMergePayload):
         "success": True,
         "file_id": fid,
         "filename": original_name,
+        "description": description,
         "size_bytes": written,
         "content_type": content_type,
+        "short_url": _short_url(base, fid, ext),
         "url": download_url,
         "download_url": download_url,
         "file_api_url": f"{base}/api/public/single/{fid}",
     }
+
+
+@router.get("/usercontent/{code}")
+async def usercontent(request: Request, code: str, preview: bool = False):
+    """Short catbox-style download path: /usercontent/<6-or-more chars>.<ext>.
+
+    The code is the shortest unique prefix of the file's sha256, so the URL is
+    stable forever and safe to cache at a CDN (immutable Cache-Control).
+    Public files only — private entries never resolve here.
+    """
+    stem = code.rsplit(".", 1)[0] if "." in code else code
+    file_id = resolve_short_code(stem)
+    if not file_id:
+        raise HTTPException(404, "Not found")
+    found = public_file_by_id(file_id)
+    if found is None:
+        raise HTTPException(404, "Not found")
+    dirname, meta = found
+    path = payload_path(file_id, dirname, meta.get("ext", ""))
+    ctype = meta.get("content_type") if preview else None
+    return stream_download(
+        request,
+        path,
+        meta.get("filename", file_id),
+        inline=preview,
+        content_type=ctype,
+        cache=True,
+    )
 
 
 @router.get("/api/public/single/{file_id}")
@@ -328,8 +388,10 @@ async def public_single_api(request: Request, file_id: str):
     payload = {
         "file_id": file_id,
         "filename": meta.get("filename", file_id),
+        "description": meta.get("description", ""),
         "size_bytes": meta["size"],
         "content_type": meta.get("content_type", "application/octet-stream"),
+        "short_url": _short_url(base, file_id, meta.get("ext", "")),
         "download_url": f"{base}/dl/s/{file_id}",
         "url": f"{base}/dl/s/{file_id}",
     }
@@ -390,8 +452,10 @@ async def public_file_api(request: Request, folder_id: str, file_id: str):
         "folder_id": folder_id,
         "file_id": file_id,
         "filename": meta.get("filename", file_id),
+        "description": meta.get("description", ""),
         "size_bytes": meta["size"],
         "content_type": meta.get("content_type", "application/octet-stream"),
+        "short_url": _short_url(base, file_id, meta.get("ext", "")),
         "download_url": f"{base}/dl/pub/{folder_id}/{file_id}",
         "url": f"{base}/dl/pub/{folder_id}/{file_id}",
     }
@@ -431,6 +495,7 @@ async def public_folder_api(request: Request, folder_id: str):
     for f in files:
         f["download_url"] = f"{base}/dl/pub/{folder_id}/{f['id']}"
         f["url"] = f["download_url"]
+        f["short_url"] = _short_url(base, f["id"], f.get("ext", ""))
         f["file_api_url"] = f"{base}/api/public/file/{folder_id}/{f['id']}"
     if not wants_html(request):
         return {

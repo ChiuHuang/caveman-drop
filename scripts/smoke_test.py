@@ -86,6 +86,58 @@ assert os.path.exists(bin_path(fid))
 assert len([n for n in os.listdir(os.path.dirname(bin_path(fid))) if n == fid]) == 1
 print("sha256 ids + bin dedupe OK")
 
+# --- short share code: /usercontent/<shortest unique prefix>.<ext> ---
+from app.storage import short_code, resolve_short_code, MIN_CODE, MAX_CODE
+code = short_code(fid)
+assert code == fid[:MIN_CODE] and len(code) == 6, code
+assert resolve_short_code(code) == fid
+uc = c.get(f"/usercontent/{code}.txt", headers=J)
+assert uc.status_code == 200 and uc.content == b"hi caveman", uc.status_code
+assert "attachment" in uc.headers["content-disposition"]
+assert uc.headers["cache-control"] == "public, max-age=31536000, immutable"
+ucr = c.get(f"/usercontent/{code}", headers={**J, "Range": "bytes=2-5"})
+assert ucr.status_code == 206 and ucr.content == b"hi caveman"[2:6], (ucr.status_code, ucr.content)
+assert c.get("/usercontent/ffffff", headers=J).status_code == 404
+assert c.get("/usercontent/zz", headers=J).status_code == 404
+assert c.get(f"/usercontent/{fid}", headers=J).content == b"hi caveman"  # full id works too
+# a 6-char clash between two different files pushes the newcomer to 7 chars
+fake = {"codes": {}, "hashes": {}}
+import app.storage as _st2
+real_load, real_save = _st2._load_index, _st2._save_index
+try:
+    _st2._load_index = lambda: {"codes": dict(fake["codes"]), "hashes": dict(fake["hashes"])}
+    _st2._save_index = lambda idx: fake.update(codes=dict(idx["codes"]), hashes=dict(idx["hashes"]))
+    h1 = "abcdef" + "1" * 58
+    h2 = "abcdef" + "2" * 58
+    assert short_code(h1) == "abcdef"
+    assert short_code(h2) == "abcdef2", "clashing prefix must grow to 7 chars"
+    assert resolve_short_code("abcdef2") == h2
+    # and a third file whose 7 chars also clash grows again
+    h3 = "abcdef2" + "3" * 57
+    assert short_code(h3) == "abcdef23"
+finally:
+    _st2._load_index, _st2._save_index = real_load, real_save
+print("short codes OK (6 chars, grows on clash)")
+
+# --- custom description via the API ---
+desc_up = c.post("/api/public/upload", headers=J,
+                 files={"file": ("note.txt", b"described bytes")},
+                 data={"description": "週會記錄 2026-09-28"})
+assert desc_up.json()["description"] == "週會記錄 2026-09-28", desc_up.json()
+dfid = desc_up.json()["file_id"]
+dm = c.get(f"/api/public/single/{dfid}", headers=J)
+assert dm.json()["description"] == "週會記錄 2026-09-28"
+dshort = dm.json()["short_url"]
+assert dshort.endswith(".txt") and "/usercontent/" in dshort, dshort
+assert c.get(dshort.replace("http://testserver", ""), headers=J).content == b"described bytes"
+# control characters stripped, long text capped
+d2 = c.post("/api/public/upload", headers=J, files={"file": ("n2.txt", b"two")},
+            data={"description": "bad\x00chars" + "x" * 400})
+assert "\x00" not in d2.json()["description"] and len(d2.json()["description"]) <= 200
+hm = c.get("/upload", headers=B)
+assert 'name="description"' in hm.text
+print("custom description OK")
+
 # --- folder flow: explicit create with name, then join ---
 cf = c.post("/api/public/folder", headers=J, json={"name": "派對"})
 assert cf.status_code == 200 and cf.json()["folder_name"] == "派對"

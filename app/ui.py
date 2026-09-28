@@ -152,6 +152,18 @@ def endpoint_card(method: str, path: str, desc: str, href: str | None = None) ->
     )
 
 
+def _meta_line(f: dict, with_type: bool = True) -> str:
+    """`652 B · 3 分前 · free-text description` for one file row."""
+    bits = [fmt_size(f.get("bytes", f.get("size", 0)) if "bytes" in f else f.get("size", 0))]
+    if with_type and f.get("content_type"):
+        bits.append(str(f["content_type"]))
+    bits.append(fmt_time(f.get("ctime", 0)))
+    desc = str(f.get("description", "") or "")
+    if desc:
+        bits.append(desc)
+    return " · ".join(html.escape(b) for b in bits if b)
+
+
 def file_rows(files: list[dict], folder_id: str, base: str) -> str:
     """Public folder file list: preview + download + copy (one download path)."""
     if not files:
@@ -160,14 +172,16 @@ def file_rows(files: list[dict], folder_id: str, base: str) -> str:
     for f in files:
         dl = f.get("download_url") or f"{base}/dl/pub/{folder_id}/{f['id']}"
         preview = f"{dl}?preview=1"
+        short = f.get("short_url") or ""
+        copy_target = short or dl
         rows.append(
             "<mdui-list-item>"
             f'<mdui-icon slot="icon" name="description"></mdui-icon>'
             f'<div><div class="fname">{html.escape(f["name"])}</div>'
-            f'<div class="fmeta">{fmt_size(f["size"])} · {html.escape(str(f.get("content_type", "")))} · {fmt_time(f.get("ctime", 0))}</div></div>'
+            f'<div class="fmeta">{_meta_line(f)}</div></div>'
             f'<mdui-button-icon slot="end-icon" icon="visibility" data-preview="{html.escape(preview)}" data-name="{html.escape(f["name"])}" title="預覽"></mdui-button-icon>'
             f'<mdui-button-icon slot="end-icon" icon="download" data-mt-download="{html.escape(dl)}" data-name="{html.escape(f["name"])}" data-size="{f["size"]}" title="下載"></mdui-button-icon>'
-            f'<mdui-button slot="end-icon" variant="text" data-copy="{html.escape(dl)}">複製連結</mdui-button>'
+            f'<mdui-button slot="end-icon" variant="text" data-copy="{html.escape(copy_target)}">複製連結</mdui-button>'
             "</mdui-list-item>"
         )
     return f'<mdui-list class="file-list">{"".join(rows)}</mdui-list>'
@@ -189,7 +203,7 @@ def private_file_rows(files: list[dict], base: str) -> str:
             ">"
             f'<mdui-icon slot="icon" name="description"></mdui-icon>'
             f'<div><div class="fname">{html.escape(f["name"])}</div>'
-            f'<div class="fmeta">{fmt_size(f.get("bytes", 0))} · {fmt_time(f.get("ctime", 0))}</div></div>'
+            f'<div class="fmeta">{_meta_line(f, with_type=False)}</div></div>'
             f'<mdui-button-icon slot="end-icon" icon="visibility" data-preview="{html.escape(pv)}" data-name="{html.escape(f["name"])}" title="預覽"></mdui-button-icon>'
             f'<mdui-button-icon slot="end-icon" icon="download" data-mt-download="{html.escape(dl)}" data-name="{html.escape(f["name"])}" data-size="{f.get("bytes", 0)}" title="下載"></mdui-button-icon>'
             f'<mdui-button slot="end-icon" variant="text" data-copy="{html.escape(dl)}">直接連結</mdui-button>'
@@ -220,7 +234,7 @@ def share_file_rows(files: list[dict], token: str, base: str) -> str:
             "<mdui-list-item>"
             f'<mdui-icon slot="icon" name="description"></mdui-icon>'
             f'<div><div class="fname">{html.escape(f["name"])}</div>'
-            f'<div class="fmeta">{fmt_size(f.get("bytes", 0))} · {fmt_time(f.get("ctime", 0))}</div></div>'
+            f'<div class="fmeta">{_meta_line(f, with_type=False)}</div></div>'
             f'<mdui-button-icon slot="end-icon" icon="visibility" data-preview="{html.escape(dl)}?preview=1" data-name="{html.escape(f["name"])}" title="預覽"></mdui-button-icon>'
             f'<mdui-button-icon slot="end-icon" icon="download" data-mt-download="{html.escape(dl)}" data-name="{html.escape(f["name"])}" data-size="{f.get("bytes", 0)}" title="下載"></mdui-button-icon>'
             f'<mdui-button slot="end-icon" variant="text" data-copy="{html.escape(dl)}">複製連結</mdui-button>'
@@ -278,6 +292,9 @@ def private_panel(files: list[dict], base: str, folders: dict, shares: dict) -> 
               <select name="folder_id" class="folderselect" title="上傳到">{opts}</select>
               <mdui-button type="submit">開始上傳</mdui-button>
             </div>
+            <div class="upfield">
+              <mdui-text-field name="description" label="說明（選填）"></mdui-text-field>
+            </div>
             {thread_panel()}
           </form>
         </mdui-card>
@@ -294,22 +311,25 @@ def private_panel(files: list[dict], base: str, folders: dict, shares: dict) -> 
 
 
 def _upload_row(folder: str | None = None) -> str:
-    """File picker row + optional folder field, both on their own line."""
-    field = (
-        f'<input type="hidden" name="folder" value="{html.escape(folder)}">'
-        if folder
-        else """
+    """File picker row + optional folder/description fields, one per line."""
+    if folder:
+        field = f'<input type="hidden" name="folder" value="{html.escape(folder)}">'
+    else:
+        field = """
               <div class="upfield">
                 <mdui-text-field name="folder" label="資料夾（選填）"></mdui-text-field>
                 <p class="muted up-hint">留空＝只給單檔永久連結。貼上資料夾 ID 就加進去，填自訂文字就自動開一個新資料夾。</p>
               </div>"""
-    )
     return f"""
               <div class="form-row">
                 <input type="file" name="file" required>
                 <mdui-button type="submit" icon="cloud_upload">{"加進資料夾" if folder else "上傳"}</mdui-button>
               </div>
-              {field}"""
+              {field}
+              <div class="upfield">
+                <mdui-text-field name="description" label="說明（選填）"></mdui-text-field>
+                <p class="up-hint">自由文字，會顯示在檔案清單與 API 回應裡。</p>
+              </div>"""
 
 
 def public_upload_form(folder_id: str | None = None) -> str:

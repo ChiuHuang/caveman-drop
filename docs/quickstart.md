@@ -13,12 +13,20 @@ curl -F file=@photo.jpg http://localhost:20042/api/public/upload
   "success": true,
   "file_id": "…64 碼 sha256…",
   "deduplicated": false,
+  "short_url": "https://usercontent.qiuhuang.dev/usercontent/f127ca.jpg",
   "download_url": "http://localhost:20042/dl/s/…"
 }
 ```
 
-同一個檔案再傳一次：`file_id` 與連結完全相同，`deduplicated` 為 `true`，
-伺服器只留一份位元組（`bin/`），不會存兩次。
+同一個檔案再傳一次：`file_id`、`short_url`、`download_url` 完全相同，
+`deduplicated` 為 `true`，伺服器只留一份位元組（`bin/`），不會存兩次。
+
+`short_url` 是給 CDN 用的短網址：sha256 最短的唯一前綴（6 碼起，撞碼就
+加長到 7、8…），帶 `immutable` 快取標頭。也可以加自由文字說明：
+
+```bash
+curl -F file=@photo.jpg -F 'description=2026 澎湖行' http://localhost:20042/api/public/upload
+```
 
 ## 建資料夾、合傳
 

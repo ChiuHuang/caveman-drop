@@ -16,6 +16,7 @@ import mimetypes
 import os
 import re
 import shutil
+import threading
 import time
 from collections import defaultdict, deque
 from typing import Any
@@ -27,6 +28,12 @@ from .config import settings
 
 PUBLIC_ID_RE = re.compile(r"^[0-9a-fA-F-]{36}$")
 HASH_ID_RE = re.compile(r"^[0-9a-f]{64}$")
+# Short share codes: the shortest unique prefix of the sha256, 6 chars unless a
+# different file already starts with the same 6, then 7, and so on.
+MIN_CODE = 6
+MAX_CODE = 12
+CODE_RE = re.compile(r"^[0-9a-f]{6,64}$")
+_index_lock = threading.Lock()
 
 _upload_log: dict[str, list[float]] = defaultdict(list)
 _public_folder_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -240,6 +247,130 @@ def validate_upload_id(value: str) -> None:
         raise HTTPException(400, "Invalid upload id")
 
 
+# ---- short share codes (catbox-style /usercontent/<code>.<ext>) ----
+
+
+def _index_path() -> str:
+    return os.path.join(settings.bin_dir, "short_index.json")
+
+
+def _scan_public_hashes() -> dict[str, str]:
+    """Every public sha256 on disk — the source of truth when the index is lost."""
+    found: dict[str, str] = {}
+    roots = [settings.single_dir] + [
+        os.path.join(settings.public_dir, d) for d in _safe_listdir(settings.public_dir)
+    ]
+    for root in roots:
+        for fn in _safe_listdir(root):
+            if fn.endswith(".json") and HASH_ID_RE.fullmatch(fn[:-5]):
+                found[fn[:-5]] = ""
+    return found
+
+
+def _safe_listdir(path: str) -> list[str]:
+    try:
+        return os.listdir(path)
+    except OSError:
+        return []
+
+
+def _load_index() -> dict[str, dict[str, str]]:
+    try:
+        with open(_index_path(), encoding="utf-8") as f:
+            data = json.load(f)
+        codes = {str(k): str(v) for k, v in (data.get("codes") or {}).items()}
+        hashes = {str(k): str(v) for k, v in (data.get("hashes") or {}).items()}
+        if not codes and not hashes:
+            raise ValueError
+        return {"codes": codes, "hashes": hashes}
+    except (OSError, ValueError, AttributeError):
+        hashes = _scan_public_hashes()
+        return {"codes": {}, "hashes": hashes}
+
+
+def _save_index(idx: dict[str, dict[str, str]]) -> None:
+    tmp = _index_path() + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(idx, f)
+        os.replace(tmp, _index_path())
+    except OSError:
+        pass
+
+
+def short_code(file_id: str) -> str:
+    """Shortest unique prefix of this file's id, assigned on first use.
+
+    Two different files that share their first 6 characters get 7, then 8 …
+    whichever length is actually unique; past MAX_CODE the full id is used.
+    """
+    if not HASH_ID_RE.fullmatch(file_id or ""):
+        return ""
+    with _index_lock:
+        idx = _load_index()
+        code = idx["hashes"].get(file_id)
+        if code:
+            return code
+        known = list(idx["hashes"])
+        code = file_id
+        for n in range(MIN_CODE, MAX_CODE + 1):
+            cand = file_id[:n]
+            if not any(h != file_id and h.startswith(cand) for h in known):
+                code = cand
+                break
+        idx["hashes"][file_id] = code
+        idx["codes"][code] = file_id
+        _save_index(idx)
+        return code
+
+
+def resolve_short_code(code: str) -> str | None:
+    """Public file_id behind a short code. Exact match only — no scanning, so
+    random codes can't be used to burn CPU. The full 64-char id works too."""
+    code = (code or "").strip().lower()
+    if not CODE_RE.fullmatch(code):
+        return None
+    with _index_lock:
+        hit = _load_index()["codes"].get(code)
+    if hit:
+        return hit
+    return code if len(code) == 64 else None
+
+
+def forget_short_code(file_id: str) -> None:
+    with _index_lock:
+        idx = _load_index()
+        code = idx["hashes"].pop(file_id, None)
+        if code and idx["codes"].get(code) == file_id:
+            idx["codes"].pop(code, None)
+            _save_index(idx)
+
+
+def public_entry(dirname: str, file_id: str) -> dict[str, Any] | None:
+    """Metadata for a public entry, only if its bytes are still there."""
+    meta = entry_meta(dirname, file_id)
+    if meta is None:
+        return None
+    if not os.path.exists(payload_path(file_id, dirname, meta.get("ext", ""))):
+        return None
+    return meta
+
+
+def public_file_by_id(file_id: str) -> tuple[str, dict[str, Any]] | None:
+    """(dirname, meta) for a public sha256, looking in singles then folders."""
+    if not HASH_ID_RE.fullmatch(file_id or ""):
+        return None
+    meta = public_entry(settings.single_dir, file_id)
+    if meta is not None:
+        return settings.single_dir, meta
+    for folder in _safe_listdir(settings.public_dir):
+        d = os.path.join(settings.public_dir, folder)
+        meta = public_entry(d, file_id)
+        if meta is not None:
+            return d, meta
+    return None
+
+
 def chunk_dir(prefix: str, upload_id: str) -> str:
     """Scratch dir for one chunked upload."""
     validate_upload_id(upload_id)
@@ -353,6 +484,8 @@ def public_folder_files(folder_id: str) -> list[dict[str, Any]]:
             {
                 "id": fid,
                 "name": meta["filename"],
+                "description": meta.get("description", ""),
+                "ext": meta.get("ext", ""),
                 "size": meta["size"],
                 "ctime": meta["ctime"],
                 "content_type": meta.get(
@@ -384,6 +517,7 @@ def private_files() -> list[dict[str, Any]]:
             {
                 "id": fid,
                 "name": meta["filename"],
+                "description": meta.get("description", ""),
                 "size": size // 1024,
                 "bytes": size,
                 "ctime": meta["ctime"],
@@ -401,14 +535,20 @@ def stream_download(
     fname: str,
     inline: bool = False,
     content_type: str | None = None,
+    cache: bool = False,
 ) -> StreamingResponse:
-    """Range-aware download. `inline=True` renders in-browser (preview)."""
+    """Range-aware download. `inline=True` renders in-browser (preview).
+
+    `cache=True` marks the response immutable (content-addressed URLs), so a CDN
+    in front of the server can hold it for a year.
+    """
     if not os.path.exists(path):
         raise HTTPException(404)
     file_size = os.path.getsize(path)
     media = content_type or "application/octet-stream"
     disposition = ("inline" if inline else "attachment") + f'; filename="{fname}"'
     rng = request.headers.get("range")
+    immutable = {"Cache-Control": "public, max-age=31536000, immutable"} if cache else {}
 
     if not rng:
         def streamer():
@@ -426,6 +566,7 @@ def stream_download(
                 "Content-Disposition": disposition,
                 "Accept-Ranges": "bytes",
                 "Content-Length": str(file_size),
+                **immutable,
             },
         )
 
@@ -458,6 +599,7 @@ def stream_download(
             "Accept-Ranges": "bytes",
             "Content-Length": str(length),
             "Content-Disposition": disposition,
+            **immutable,
         },
     )
 

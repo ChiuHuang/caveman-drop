@@ -23,6 +23,11 @@ def _api_payload(request: Request) -> dict:
             "blob_store": "bytes are stored once under BIN_DIR (default bin/); re-uploading an identical file reuses that copy",
             "deduplicated": "true in an upload response when the bytes were already stored",
         },
+        "description": (
+            "Optional free-text note. multipart uploads take a `description` form field; "
+            "merge_chunks takes a `description` JSON key. Echoed back in every response "
+            "and shown in listings."
+        ),
         "limits": {
             "max_file_size_bytes": settings.max_file_size,
             "max_file_size_human": f"{settings.max_file_size // 1024**3} GB (public uploads; private uncapped)",
@@ -77,6 +82,16 @@ def _api_payload(request: Request) -> dict:
                 "method": "GET",
                 "url": f"{base}/dl/s/{{file_id}}",
                 "notes": "Direct download for folderless single files. Range supported; ?preview=1 previews inline.",
+            },
+            "short_download": {
+                "method": "GET",
+                "url": f"{base}/usercontent/{{code}}.{{ext}}",
+                "notes": (
+                    "catbox-style short link: the shortest unique prefix of the file's sha256, "
+                    "6 characters (7, 8 … when a different file shares those characters). "
+                    "Immutable Cache-Control, so a CDN in front can cache it. Public files only. "
+                    "Returned as `short_url` by every upload and listing response."
+                ),
             },
             "upload_page": {
                 "method": "GET",
@@ -147,6 +162,17 @@ only when a folder was used).
 yields the same id and the same link. Identical bytes are stored once in
 the bin directory — re-uploading does not store a second copy and returns
 `"deduplicated": true`.
+
+An optional free-text `description` may be sent with the upload
+(multipart field `description`, or a `description` key in the merge JSON);
+it is echoed back and shown in listings.
+
+## Short share links
+GET {base}/usercontent/{{code}}.{{ext}}
+`code` is the shortest unique prefix of the file's sha256: 6 characters, or
+7, 8 … if another file starts with the same characters. Served with an
+immutable `Cache-Control`, so a CDN can hold it. Public files only.
+Every response also carries it as `short_url`.
 
 Generated links follow the request: an HTTPS request gets HTTPS URLs back
 (`Forwarded` / `X-Forwarded-Proto` are honoured).

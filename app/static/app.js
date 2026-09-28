@@ -245,6 +245,8 @@
     const elapsed = Math.max((performance.now() - startedAt) / 1000, 0.001);
     try {
       const body = { upload_id: uploadId, filename: file.name, total_chunks: total };
+      const desc = fieldValue(form, "description");
+      if (desc) body.description = desc;
       if (isPublic) {
         const folderText = fieldValue(form, "folder");  // 既有資料夾 ID 或自訂名稱都能用
         if (folderText) body.folder = folderText;
@@ -266,19 +268,25 @@
         const out = form.parentElement.querySelector("[data-upload-result]");
         const durl = data.download_url || data.url;
         const furl = data.folder_url || data.share_url;
+        const share = data.short_url || durl;   // catbox-style short link when we have one
         const secs = elapsed < 10 ? elapsed.toFixed(1) : Math.round(elapsed);
-        const rows = [
-          linkRow("檔案", durl,
-            `<mdui-button variant="text" data-preview="${esc(durl)}?preview=1" data-name="${esc(data.filename)}">預覽</mdui-button>` +
-            `<mdui-button variant="text" data-copy="${esc(durl)}">複製</mdui-button>`),
-        ];
+        const rows = [];
+        if (share && share !== durl) {
+          rows.push(linkRow("連結", share,
+            `<mdui-button variant="text" data-copy="${esc(share)}">複製</mdui-button>` +
+            `<a href="${esc(share)}"><mdui-button variant="text">開啟</mdui-button></a>`));
+        }
+        rows.push(linkRow(share === durl ? "檔案" : "直連", durl,
+          `<mdui-button variant="text" data-preview="${esc(durl)}?preview=1" data-name="${esc(data.filename)}">預覽</mdui-button>` +
+          `<mdui-button variant="text" data-copy="${esc(durl)}">複製</mdui-button>`));
         if (furl) {
           rows.push(linkRow("資料夾", furl,
             `<a href="${esc(furl)}"><mdui-button variant="text">開啟</mdui-button></a>` +
             `<mdui-button variant="text" data-copy="${esc(furl)}">複製</mdui-button>`));
         }
-        const html = resultCard("上傳完成", data.filename,
-          `${fmtMB(data.size_bytes)} · ${secs} 秒 · 平均 ${fmtMB(data.size_bytes / elapsed)}/s`, rows);
+        const stats = `${fmtMB(data.size_bytes)} · ${secs} 秒 · 平均 ${fmtMB(data.size_bytes / elapsed)}/s`
+          + (data.deduplicated ? " · 內容已存在，未重複儲存" : "");
+        const html = resultCard("上傳完成", data.filename, stats, rows);
         if (out) out.innerHTML = html;
         if (panel) panel.hidden = true;
         window.toast("上傳完成");

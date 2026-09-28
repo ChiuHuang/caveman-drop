@@ -9,6 +9,23 @@
 一份（`BIN_DIR`，預設 `bin/`），所以重複上傳不會多佔空間，連結也相同。
 回應會帶 `deduplicated: true` 表示這份位元組之前就存過。
 
+## 短網址（CDN 用）
+
+`GET /usercontent/{code}.{ext}` —— `code` 取 sha256 **最短的唯一前綴**：
+一般 6 碼（像 catbox），若另一個檔案前 6 碼相同就自動用 7 碼、8 碼…
+回應帶 `Cache-Control: public, max-age=31536000, immutable`，網址永不失效，
+可以放心丟給 Cloudflare 快取。每個上傳／清單回應都會附 `short_url`。
+
+只解析公開檔案；私人檔案不會出現在這條路徑（避免被試探）。
+
+```json
+{
+  "file_id": "f127ca62682b836ac65639814a83d44ce2ff4008209605cb39e444afd6fa2923",
+  "short_url": "https://usercontent.qiuhuang.dev/usercontent/f127ca.pdf",
+  "download_url": "https://file.chiuhuang.dev/dl/s/f127ca…"
+}
+```
+
 內容協商：帶瀏覽器 `User-Agent` + `Accept: text/html` 會拿到 MDUI HTML
 控制台；其他一律拿 JSON / 純文字。`?format=json|html|text` 可強制指定。
 
@@ -16,22 +33,24 @@
 
 ### `POST /api/public/upload`
 
-匿名上傳。Multipart 欄位：`file`（必填）、`folder`（選填）。`folder` 給既有
-資料夾 id 就加進去，給任意文字就以其為名稱自動開一個新資料夾。不帶 folder
-就是單檔直連，不會建資料夾，回傳 `file_id`、`filename`、`size_bytes`、
-`download_url`、`file_api_url`；帶 folder 才回傳 `folder_url` 等資料夾欄位。
+匿名上傳。Multipart 欄位：`file`（必填）、`folder`（選填）、`description`
+（選填）。`folder` 給既有資料夾 id 就加進去，給任意文字就以其為名稱自動開一個
+新資料夾。不帶 folder 就是單檔直連，不會建資料夾，回傳 `file_id`、
+`filename`、`description`、`size_bytes`、`short_url`、`download_url`、
+`file_api_url`；帶 folder 才回傳 `folder_url` 等資料夾欄位。
 
 ```bash
 curl -F file=@photo.jpg http://localhost:20042/api/public/upload
 curl -F file=@photo.jpg -F folder=相簿 http://localhost:20042/api/public/upload
+curl -F file=@photo.jpg -F 'description=2026 澎湖行' http://localhost:20042/api/public/upload
 ```
 
 ### `POST /api/public/chunk` → `POST /api/public/merge_chunks`
 
 分段上傳（瀏覽器會自動用）。先並行上傳分塊（multipart：`file_chunk`、
 `upload_id`、`index`、`filename`），再 POST JSON（`upload_id`、
-`filename`、`total_chunks`、選填 `folder`，同樣可填 id 或名稱）合併，
-回傳與單次上傳相同。
+`filename`、`total_chunks`、選填 `folder`（id 或名稱）、選填
+`description`）合併，回傳與單次上傳相同。
 
 ### `POST /api/public/folder`
 
@@ -40,12 +59,13 @@ curl -F file=@photo.jpg -F folder=相簿 http://localhost:20042/api/public/uploa
 
 ### `GET /api/public/folder/{folder_id}`
 
-資料夾資訊 + `files[]`，每檔附 `download_url` / `file_api_url`。
-瀏覽器看到的是資料夾介面。
+資料夾資訊 + `files[]`，每檔附 `name`、`description`、`download_url`、
+`short_url`、`file_api_url`。瀏覽器看到的是資料夾介面。
 
 ### `GET /api/public/file/{folder_id}/{file_id}`
 
-單一檔案資訊：`filename`、`size_bytes`、`content_type`、`download_url`。
+單一檔案資訊：`filename`、`description`、`size_bytes`、`content_type`、
+`short_url`、`download_url`。
 瀏覽器看到的是檔案卡片（含預覽）。
 
 ### `GET /dl/pub/{folder_id}/{file_id}`

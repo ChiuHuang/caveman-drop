@@ -23,6 +23,7 @@ from ..storage import (
     bw_status,
     check_rate_limit,
     chunk_dir,
+    clean_name,
     client_ip,
     create_private_folder,
     create_share,
@@ -55,6 +56,7 @@ class MergePayload(BaseModel):
     filename: str
     total_chunks: int
     folder_id: Optional[str] = None
+    description: str = ""
 
 
 class MkdirPayload(BaseModel):
@@ -377,6 +379,7 @@ async def merge_chunks(request: Request, payload: MergePayload):
             "filename": payload.filename,
             "ext": ext,
             "folder": folder_id,
+            "description": clean_name(payload.description, 200),
             "content_type": mimetypes.guess_type(payload.filename)[0] or "application/octet-stream",
             "size": written,
         },

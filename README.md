@@ -86,8 +86,14 @@ Cloudflare 後面也能正確限速。登入 session 不限速。
 
 檔案 id 就是內容的 sha256：`file_id` 相同代表位元組完全相同。位元組只存一份
 在 `BIN_DIR`（預設 `bin/`），所以同一個檔案傳十次還是只有一份，連結也一樣。
-資料夾 / 單檔目錄裡只放 `<file_id>.json`（檔名、型別、大小、所属資料夾）。
+資料夾 / 單檔目錄裡只放 `<file_id>.json`（檔名、型別、大小、說明、所属資料夾）。
 刪掉最後一個引用時才會真的刪位元組。舊的 UUID 檔案 id 仍可下載。
+
+分享連結有兩種：完整直連（`/dl/s/<sha256>`）與 **短網址**
+`/usercontent/<6碼>.<ext>`——取 sha256 最短的唯一前綴，撞到別的檔案就自動
+加長到 7、8 碼…，並帶 `Cache-Control: immutable`，網址永不失效，直接丟給
+Cloudflare 快取即可（`usercontent.qiuhuang.dev` 指向同一台機器的那個路徑）。
+上傳也可以帶自由文字說明：`description`（表單欄位或 merge 的 JSON key）。
 
 ## 文件
 
