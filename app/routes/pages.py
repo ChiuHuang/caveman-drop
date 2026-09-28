@@ -27,7 +27,7 @@ from ..storage import (
 from ..i18n import lang_for, t
 from ..ui import drive_panel, file_rows, page, public_upload_form
 from ..auth import authed
-from ..urls import base_url
+from ..urls import base_url, private_only
 
 router = APIRouter()
 
@@ -40,20 +40,28 @@ def _dashboard_html(request: Request, is_signed_in: bool) -> str:
         current = (request.query_params.get("folder") or "").strip()
         if current not in folders:
             current = ""
+        # A private-only host shows the drive on its own: no tabs, no public UI.
+        solo = private_only(request)
         return page(
             t(lang, "drive_title"),
             f"""
         <div class="stack">
           {drive_panel(
             lang, private_files(), base, folders, get_shares(), current,
-            public_files(), public_folder_list(t(lang, "unnamed_folder")),
+            None if solo else public_files(),
+            None if solo else public_folder_list(t(lang, "unnamed_folder")),
+            solo=solo,
           )}
         </div>""",
             active="home",
             authed=True,
             lang=lang,
             extra_qs=f"folder={current}&" if current else "",
+            solo=solo,
         )
+    if private_only(request):
+        # `/` is the login page here: nothing public on this host.
+        return _login_html(request)
     return page(
         t(lang, "nav_home"),
         f"""
@@ -156,6 +164,7 @@ def _login_html(request: Request, error: str = "") -> str:
         </mdui-card>""",
         active="login",
         lang=lang,
+        solo=private_only(request),
     )
 
 
@@ -248,6 +257,11 @@ def _upload_text(request: Request) -> str:
 
 @router.get("/upload")
 async def upload_page(request: Request):
+    if private_only(request):
+        # This host is the private drive; the public upload page is not on it.
+        if wants_html(request):
+            return RedirectResponse("/", status_code=303)
+        return PlainTextResponse(_upload_text(request))
     if authed(request):
         # Private mode: no public upload — the dashboard has the private uploader.
         if wants_html(request):

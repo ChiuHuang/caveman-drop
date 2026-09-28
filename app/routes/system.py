@@ -245,6 +245,13 @@ Honoured over HTTPS only, never echoed into a response or redirect
 (`/login?auth=…` redirects to `/` and drops it), and 10 wrong guesses from one
 IP lock it out for 10 minutes. `?token=<mobile token>` also works as before.
 
+## Private-only hosts
+`PRIVATE_ONLY_HOSTS` (default `pvf.chiuhuang.dev`) lists the domains that serve
+the private drive alone. There `/` is the login page when signed out and the
+drive on its own when signed in — no tabs, no public UI — and `/upload` redirects
+to `/`. The public JSON API keeps working on those hosts, so scripts are
+unaffected.
+
 ## Create an empty public folder
 POST {base}/api/public/folder
 Optional JSON `{{"name": "free text"}}`. Returns a folder_id plus `folder_url`,

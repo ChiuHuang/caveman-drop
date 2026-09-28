@@ -484,6 +484,27 @@ assert "Lawful use only" not in r.text and "offending content" not in r.text
 assert "machines and AI" not in r.text
 print("private-mode dashboard OK (drive: one list, icons in header)")
 
+# --- a private-only host shows the login page and nothing public ---
+PVF = {**B, "Host": "pvf.chiuhuang.dev"}
+anon3 = TestClient(app)
+r = anon3.get("/", headers=PVF)
+assert r.status_code == 200 and 'name="password"' in r.text, "pvf / must be the login page"
+assert "data-chunked" not in r.text, "no public upload form on a private-only host"
+assert 'href="/upload"' not in r.text and 'href="/docs"' not in r.text, "no public nav"
+assert anon3.get("/upload", headers=PVF, follow_redirects=False).status_code == 303
+pvf = TestClient(app)
+pvf.post("/login", data={"password": "passw"})
+r = pvf.get("/", headers=PVF)
+assert "data-drive" in r.text and 'data-solo' in r.text, "drive only, no tabs"
+assert "mdui-tabs" not in r.text and 'data-tabpanel="public"' not in r.text
+assert "data-chunked" in r.text, "the private uploader is still there"
+# the same session on another host keeps the full interface
+r = pvf.get("/", headers=B)
+assert "mdui-tabs" in r.text and 'data-tabpanel="public"' in r.text
+# ?auth= still opens the drive on the private host
+assert "data-drive" in anon3.get("/?auth=passw", headers={**PVF, "X-Forwarded-Proto": "https"}).text
+print("private-only host OK (pvf: login page, drive with no tabs)")
+
 r = c.get("/upload", headers=B, follow_redirects=False)
 assert r.status_code == 303, "logged-in /upload should redirect to /"
 print("logged-in /upload redirect OK")

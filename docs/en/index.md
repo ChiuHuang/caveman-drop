@@ -21,10 +21,14 @@ English. `?lang=zh-TW` / `?lang=en` switches it by hand.
 
 Once signed in you get **My drive**, the way Google Drive works: upload a file,
 click a folder to go into it, drag a file onto a folder row to move it, drag
-files in from the desktop to upload them into that folder. The two icons in the
-header are New folder and Upload, every row can be renamed, shared or deleted,
-and folders and files sort together in one list. A second tab manages the
-public side.
+files in from the desktop to upload them into that folder. The two icons beside
+the title are New folder and Upload, every row can be renamed, shared or
+deleted, and folders and files sort together in one list. A second tab manages
+the public side.
+
+A private-only host (`PRIVATE_ONLY_HOSTS`, `pvf.chiuhuang.dev` by default) drops
+all of that chrome: `/` is the login page when you are signed out and the drive
+on its own — no tabs, no public UI — when you are signed in.
 
 Source: <https://github.com/ChiuHuang/caveman-drop>
 

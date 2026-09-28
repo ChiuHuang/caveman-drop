@@ -63,3 +63,18 @@ def base_url(request: Request) -> str:
 def is_https(request: Request) -> bool:
     """True when the visitor reached us over HTTPS (directly or through a proxy)."""
     return base_url(request).startswith("https://")
+
+
+def private_only(request: Request) -> bool:
+    """True when this host serves the private drive and nothing else.
+
+    `PRIVATE_ONLY_HOSTS` (default `pvf.chiuhuang.dev`) names the domains that are
+    for signed-in use only: `/` is the login page when signed out, and the drive
+    with no tabs or public UI when signed in. The public JSON API keeps working
+    on those hosts, so scripts are unaffected.
+    """
+    hosts = settings.private_only_hosts
+    if not hosts:
+        return False
+    netloc = _host(request).split("@")[-1].split(":")[0].lower()
+    return netloc in hosts

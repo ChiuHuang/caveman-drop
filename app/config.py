@@ -69,6 +69,15 @@ class Settings:
     public_base_url: str = field(
         default_factory=lambda: os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
     )
+    # Hosts that serve the private drive only. On these, `/` is the login page
+    # when signed out and the drive (no tabs, no public UI) when signed in.
+    private_only_hosts: tuple[str, ...] = field(
+        default_factory=lambda: tuple(
+            h.strip().lower()
+            for h in os.getenv("PRIVATE_ONLY_HOSTS", "pvf.chiuhuang.dev").split(",")
+            if h.strip()
+        )
+    )
     upload_dir: str = field(default_factory=lambda: os.getenv("UPLOAD_DIR", "airdrop_files"))
     tmp_dir: str = field(default_factory=lambda: os.getenv("TMP_DIR", "airdrop_tmp"))
     public_dir: str = field(default_factory=lambda: os.getenv("PUBLIC_DIR", "public_uploads"))

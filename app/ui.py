@@ -19,7 +19,13 @@ MDUI_JS = "https://unpkg.com/mdui@2/mdui.global.js"
 ICON_FONT = "https://fonts.googleapis.com/icon?family=Material+Icons"
 
 
-def nav_items(lang: str, active: str, authed: bool) -> list[tuple[str, str, str, str]]:
+def nav_items(lang: str, active: str, authed: bool, solo: bool = False) -> list[tuple[str, str, str, str]]:
+    if solo:
+        # A private-only host: sign in, drive, sign out. Nothing public.
+        if authed:
+            return [("home", t(lang, "drive_title"), "/", "folder"),
+                    ("logout", t(lang, "nav_logout"), "/logout", "logout")]
+        return [("login", t(lang, "nav_login"), "/login", "login")]
     items = [
         ("home", t(lang, "nav_home"), "/", "home"),
         ("api", t(lang, "nav_api"), "/api", "api"),
@@ -63,9 +69,10 @@ def page(
     authed: bool = False,
     lang: str = EN,
     extra_qs: str = "",
+    solo: bool = False,
 ) -> str:
     nav_html = []
-    for key, label, href, icon in nav_items(lang, active, authed):
+    for key, label, href, icon in nav_items(lang, active, authed, solo):
         cls = "mdui-list-item-active" if key == active else ""
         nav_html.append(
             f'<mdui-list-item href="{href}" class="{cls}" rounded>'
@@ -424,13 +431,15 @@ def drive_panel(
     current: str = "",
     public: list[dict] | None = None,
     public_folders: list[dict] | None = None,
+    solo: bool = False,
 ) -> str:
     """Admin home: the private drive plus the public area, both as one flat list.
 
     Folders and files sit in the same list and sort together, the way a file
     manager shows them. Every folder row is a drop target, so a file can be
     dragged into any folder from anywhere, and files dragged from the desktop
-    upload straight into the row they land on.
+    upload straight into the row they land on. `solo=True` drops the public tab
+    entirely, for the private-only host.
     """
     public = public or []
     public_folders = public_folders or []
@@ -467,23 +476,17 @@ def drive_panel(
             return f'<mdui-card variant="filled" class="empty">{html.escape(t(lang, "empty_files"))}</mdui-card>'
         return f'<mdui-list class="file-list">{rows}</mdui-list>'
 
-    return f"""
-        <div class="drive" data-drive>
-        <mdui-tabs value="drive" data-tabs>
-          <mdui-tab value="drive">{html.escape(t(lang, "drive_title"))}</mdui-tab>
-          <mdui-tab value="public">{html.escape(t(lang, "tab_public", n=n_pub))}</mdui-tab>
-        </mdui-tabs>
-
-        <div data-tabpanel="drive">
+    drive = f"""
           {_private_upload_form(lang, current)}
           <mdui-card variant="outlined" class="card-pad"
             {_drop_attrs("private", current, cur_name or t(lang, "drive_title"))}>
             {_drive_head(lang, current, cur_name, len(frows) + len(shown))}
             {sort_bar(lang)}
             {listing(frows + private_file_rows(lang, shown, base, wrap=False))}
-          </mdui-card>
-        </div>
-
+          </mdui-card>"""
+    if solo:
+        return f'<div class="drive" data-drive data-solo>{drive}</div>'
+    public_tab = f"""
         <div data-tabpanel="public" hidden>
           {public_upload_form(lang=lang)}
           <mdui-card variant="outlined" class="card-pad">
@@ -491,8 +494,14 @@ def drive_panel(
             {sort_bar(lang)}
             {listing(prows + private_file_rows(lang, public, base, scope="public", wrap=False))}
           </mdui-card>
-        </div>
         </div>"""
+    tabs = f"""
+        <mdui-tabs value="drive" data-tabs>
+          <mdui-tab value="drive">{html.escape(t(lang, "drive_title"))}</mdui-tab>
+          <mdui-tab value="public">{html.escape(t(lang, "tab_public", n=n_pub))}</mdui-tab>
+        </mdui-tabs>
+        <div data-tabpanel="drive">{drive}</div>{public_tab}"""
+    return f'<div class="drive" data-drive>{tabs}</div>'
 
 
 def _upload_row(lang: str, folder: str | None = None) -> str:
