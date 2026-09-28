@@ -56,6 +56,7 @@ pre.curl code, .mdui-prose pre code { background: transparent; color: inherit; p
 .folderselect { font: inherit; padding: 8px 12px; border-radius: 8px; border: 1px solid rgba(127,127,127,.4); background: transparent; color: inherit; max-width: 200px; }
 .nav-foot { padding: 12px; font-size: .8rem; opacity: .65; }
 .prose-wrap { padding: 20px 24px; }
+.docs-note { margin: 0 0 12px; font-size: .85rem; }
 /* 文件排版（自帶，不依賴 CDN） */
 .mdui-prose { line-height: 1.75; overflow-wrap: break-word; }
 .mdui-prose h1 { font-size: 1.6rem; margin: 4px 0 12px; }

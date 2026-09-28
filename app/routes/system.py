@@ -212,6 +212,15 @@ Every response also carries it as `short_url`.
 Generated links follow the request: an HTTPS request gets HTTPS URLs back
 (`Forwarded` / `X-Forwarded-Proto` are honoured).
 
+## Private access without a cookie
+Private endpoints accept `?auth=<PASSWORD>` in the query string, for clients
+that go through a CORS-style proxy (`https://proxy.example/https://this.host/…`):
+the proxy forwards the request but the browser never receives our Set-Cookie,
+so a cookie session cannot work. Pass the parameter on every request instead.
+Honoured over HTTPS only, never echoed into a response or redirect
+(`/login?auth=…` redirects to `/` and drops it), and 10 wrong guesses from one
+IP lock it out for 10 minutes. `?token=<mobile token>` also works as before.
+
 ## Create an empty public folder
 POST {base}/api/public/folder
 Optional JSON `{{"name": "free text"}}`. Returns a folder_id plus `folder_url`,

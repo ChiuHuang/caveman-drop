@@ -70,6 +70,40 @@ assert h.index("legalbar") > h.index("Public upload"), "legal must be at the bot
 assert "data-tos" not in h
 print("legal page OK (zh-TW + English, Taiwan law, bottom of page)")
 
+# --- ?auth=<PASSWORD> for proxied clients that cannot carry our cookie ---
+import app.auth as _auth
+
+anon2 = TestClient(app)                       # never logged in, no cookie
+H = {**J, "X-Forwarded-Proto": "https", "CF-Connecting-IP": "203.0.113.11"}
+HB = {**B, "X-Forwarded-Proto": "https", "CF-Connecting-IP": "203.0.113.11"}
+assert "Private mode" in anon2.get("/?auth=passw", headers=HB).text, "?auth= must open private mode"
+assert "Private mode" not in anon2.get("/?auth=passw", headers=B).text, "plain http must not take ?auth="
+assert "Private mode" not in anon2.get("/?auth=wrong", headers=HB).text
+r = anon2.get("/login?auth=passw", headers=HB, follow_redirects=False)
+assert r.status_code == 303 and r.headers["location"] == "/", "secret must be stripped on redirect"
+assert "passw" not in anon2.get("/?auth=passw", headers=HB).text, "password must never be echoed"
+assert anon2.get("/api/files?auth=passw", headers=H).status_code == 200
+anon2.cookies.clear()   # GET /login?auth= above may have set one; the param must work alone
+assert anon2.get("/api/files", headers=H).status_code == 401, "no cookie, no param"
+mf2 = anon2.post("/api/folders?auth=passw", headers=H, json={"name": "param folder"})
+assert mf2.status_code == 200 and mf2.json()["name"] == "param folder"
+# chunked private upload with only the param
+_auth._fails.clear()
+u2 = str(uuid.uuid4())
+anon2.post("/api/upload_chunk?auth=passw", headers=H, files={"file_chunk": ("c", b"param bytes")},
+           data={"upload_id": u2, "index": "0", "filename": "pp.txt"})
+m2 = anon2.post("/api/merge_chunks?auth=passw", headers=H,
+                json={"upload_id": u2, "filename": "pp.txt", "total_chunks": 1})
+assert m2.json()["success"]
+assert anon2.get(f"/dl/{m2.json()['file_id']}", headers=H).content == b"param bytes"
+# brute force is throttled on HTML pages, and the budget is per IP
+_auth._fails.clear()
+codes = [anon2.get("/?auth=nope", headers=HB).status_code for _ in range(12)]
+assert 429 in codes, codes
+_auth._fails.clear()
+assert "Private mode" in anon2.get("/?auth=passw", headers=HB).text, "another IP is unaffected"
+print("?auth= param (proxy case) OK")
+
 # --- language follows the client IP: zh-TW for Taiwan ranges, English elsewhere ---
 TW = {**B, "CF-Connecting-IP": "120.122.9.9"}
 EN_IP = {**B, "CF-Connecting-IP": "8.8.8.8"}
@@ -83,6 +117,8 @@ assert "首頁" not in en and "免帳號" not in en, "non-Taiwan IP must not get
 # ?lang override wins over the IP
 assert "免帳號" in c.get("/?lang=zh-TW", headers=EN_IP).text
 assert "Anonymous file sharing" in c.get("/?lang=en", headers=TW).text
+# the footer offers the other language
+assert 'href="?lang=en"' in c.get("/", headers=TW).text and 'href="?lang=zh-TW"' in c.get("/", headers=EN_IP).text
 # every page renders in both languages
 for path in ("/", "/upload", "/login", "/api", "/docs", "/legal"):
     a = c.get(path, headers=TW)

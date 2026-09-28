@@ -40,7 +40,7 @@ def _load(slug: str) -> str | None:
         return f.read()
 
 
-def _docs_shell(lang: str, active: str, body_html: str) -> str:
+def _docs_shell(lang: str, active: str, body_html: str, slug: str = "index") -> str:
     items = []
     for slug, zh_title, en_title in PAGES:
         title = zh_title if lang == "zh-TW" else en_title
@@ -50,6 +50,11 @@ def _docs_shell(lang: str, active: str, body_html: str) -> str:
             f'<mdui-list-item href="{href}" class="{cls}" rounded>'
             f"{html.escape(title)}</mdui-list-item>"
         )
+    note = (
+        ""
+        if lang == "zh-TW" or slug == "legal"
+        else '<p class="muted docs-note">' + html.escape(t(lang, "docs_zh_only")) + "</p>"
+    )
     return page(
         t(lang, "docs_kicker"),
         f"""<div class="docs-layout">
@@ -59,7 +64,7 @@ def _docs_shell(lang: str, active: str, body_html: str) -> str:
         <div class="nav-foot"><a href="https://github.com/ChiuHuang/caveman-drop">GitHub</a> · <a href="/llms.txt">llms.txt</a></div>
       </mdui-card>
       <mdui-card variant="outlined" class="prose-wrap">
-        <div class="mdui-prose">{body_html}</div>
+        {note}<div class="mdui-prose">{body_html}</div>
       </mdui-card>
     </div>""",
         active="docs",
@@ -77,7 +82,7 @@ async def legal_alias(request: Request):
 async def docs_index(request: Request):
     src = _load("index") or "# Docs\n\nMissing docs/index.md"
     if wants_html(request):
-        return HTMLResponse(_docs_shell(lang_for(request), "index", _md.convert(src)))
+        return HTMLResponse(_docs_shell(lang_for(request), "index", _md.convert(src), "index"))
     return PlainTextResponse(src)
 
 
@@ -89,5 +94,5 @@ async def docs_page(request: Request, slug: str):
     if src is None:
         return PlainTextResponse("Doc page not found.", status_code=404)
     if wants_html(request):
-        return HTMLResponse(_docs_shell(lang_for(request), slug, _md.convert(src)))
+        return HTMLResponse(_docs_shell(lang_for(request), slug, _md.convert(src), slug))
     return PlainTextResponse(src)

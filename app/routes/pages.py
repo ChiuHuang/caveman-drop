@@ -26,15 +26,16 @@ from ..storage import (
 )
 from ..i18n import lang_for, t
 from ..ui import file_rows, page, private_panel, public_upload_form
+from ..auth import authed
 from ..urls import base_url
 
 router = APIRouter()
 
 
-def _dashboard_html(request: Request, authed: bool) -> str:
+def _dashboard_html(request: Request, is_signed_in: bool) -> str:
     base = base_url(request)
     lang = lang_for(request)
-    if authed:
+    if is_signed_in:
         return page(
             t(lang, "private_h1"),
             f"""
@@ -130,10 +131,10 @@ def _index_text(request: Request, authed: bool) -> str:
 
 @router.get("/")
 async def index(request: Request):
-    authed = bool(request.session.get("auth"))
+    signed_in = authed(request)
     if wants_html(request):
-        return HTMLResponse(_dashboard_html(request, authed))
-    return PlainTextResponse(_index_text(request, authed))
+        return HTMLResponse(_dashboard_html(request, signed_in))
+    return PlainTextResponse(_index_text(request, signed_in))
 
 
 def _login_html(request: Request, error: str = "") -> str:
@@ -163,12 +164,14 @@ def _login_html(request: Request, error: str = "") -> str:
 
 @router.get("/login")
 async def login_get(request: Request):
-    if wants_html(request):
-        if request.session.get("auth"):
+    if authed(request):
+        # ?auth=<PASSWORD> works too; set the cookie and drop the secret from the URL
+        request.session["auth"] = True
+        if wants_html(request):
             return RedirectResponse("/", status_code=303)
-        return HTMLResponse(_login_html(request))
-    if request.session.get("auth"):
         return PlainTextResponse("Already authenticated. Use GET / for the server description.")
+    if wants_html(request):
+        return HTMLResponse(_login_html(request))
     return PlainTextResponse(
         "CaveMan Drop login\n\n"
         "This server is text/API only.\n"
@@ -183,6 +186,7 @@ async def login_post(request: Request, password: str = Form(...)):
         if wants_html(request):
             return RedirectResponse("/", status_code=303)
         return PlainTextResponse("Login successful. GET / for the server description.")
+    lang = lang_for(request)
     if wants_html(request):
         return HTMLResponse(_login_html(request, t(lang, "login_err")), status_code=401)
     return PlainTextResponse("Wrong password.", status_code=401)
@@ -247,7 +251,7 @@ def _upload_text(request: Request) -> str:
 
 @router.get("/upload")
 async def upload_page(request: Request):
-    if request.session.get("auth"):
+    if authed(request):
         # Private mode: no public upload — the dashboard has the private uploader.
         if wants_html(request):
             return RedirectResponse("/", status_code=303)
@@ -266,14 +270,14 @@ def _folder_html(request: Request, folder_id: str) -> HTMLResponse | None:
         return None
     base = base_url(request)
     lang = lang_for(request)
-    authed = bool(request.session.get("auth"))
+    is_signed_in = authed(request)
     files = public_folder_files(folder_id)
     for f in files:
         f["download_url"] = f"{base}/dl/pub/{folder_id}/{f['id']}"
         f["short_url"] = f"{base}/usercontent/{short_code(f['id'])}{f.get('ext', '')}"
     rows = file_rows(lang, files, folder_id, base)
     title = public_folder_name(folder_id) or t(lang, "unnamed_folder")
-    if authed:
+    if is_signed_in:
         add_card = f"""
           <mdui-card variant="outlined" class="card-pad">
             <h2>{html.escape(t(lang, "add_here_h"))}</h2>
@@ -302,7 +306,7 @@ def _folder_html(request: Request, folder_id: str) -> HTMLResponse | None:
           {add_card}
         </div>""",
         active="upload",
-        authed=authed,
+        authed=is_signed_in,
         lang=lang,
     )
     return HTMLResponse(body)

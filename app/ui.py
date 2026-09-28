@@ -12,7 +12,7 @@ from __future__ import annotations
 import datetime
 import html
 
-from .i18n import EN, ZH, t
+from .i18n import EN, ZH, other, t
 
 MDUI_CSS = "https://unpkg.com/mdui@2/mdui.css"
 MDUI_JS = "https://unpkg.com/mdui@2/mdui.global.js"
@@ -50,6 +50,8 @@ def legal_footer(lang: str) -> str:
         f'<a href="/legal">{html.escape(legal)}</a>'
         f'<a href="/docs/limits">{html.escape(limits)}</a>'
         '<a href="/llms.txt">llms.txt</a>'
+        f'<a href="?lang={other(lang)}" title="切換語言 / switch language">'
+        f'{html.escape(t(lang, "lang_zh"))}</a>'
         "</span></footer>"
     )
 

@@ -43,6 +43,7 @@ app/
   config.py          # .env 設定（連接埠、密碼、限制、目錄）
   negotiation.py     # 瀏覽器 vs 程式的內容協商
   i18n.py            # 依來源 IP 選語言（台灣網段中文、其他英文）＋字串表
+  auth.py            # session cookie 或 ?auth=<PASSWORD>（給走代理的客戶端）
   storage.py         # 檔案儲存、配額、速率限制、下載、sha256 bin
   urls.py            # 反向代理後仍正確的基底網址（https 進 → https 出）
   ui.py              # 全站共用 MDUI v2 繁中 HTML 外殼
@@ -87,6 +88,11 @@ Cloudflare 後面也能正確限速。登入 session 不限速。
 公開上傳的 `folder` 欄位吃兩種東西：既有資料夾 id，或任意文字（自動開一個
 以它為名字的新資料夾並上傳進去）。要「只建資料夾、不傳檔」就
 `POST /api/public/folder {"name": "..."}`，或網頁的「建立資料夾」分頁。
+
+私人區除了登入 cookie，也接受 **`?auth=<PASSWORD>`**（每個請求都帶）。這是為
+了走 CORS 型代理的客戶端：代理會轉送請求，但 `Set-Cookie` 回不到瀏覽器，
+cookie session 在那條路上無效。只在 HTTPS 生效、密碼不會被回寫到任何回應或
+轉址、同一 IP 猜錯 10 次鎖 10 分鐘。
 
 檔案 id 就是內容的 sha256：`file_id` 相同代表位元組完全相同。位元組只存一份
 在 `BIN_DIR`（預設 `bin/`），所以同一個檔案傳十次還是只有一份，連結也一樣。

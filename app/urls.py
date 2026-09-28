@@ -58,3 +58,8 @@ def base_url(request: Request) -> str:
         return settings.public_base_url
     root = (request.scope.get("root_path") or "").rstrip("/")
     return f"{_scheme(request)}://{_host(request)}{root}"
+
+
+def is_https(request: Request) -> bool:
+    """True when the visitor reached us over HTTPS (directly or through a proxy)."""
+    return base_url(request).startswith("https://")

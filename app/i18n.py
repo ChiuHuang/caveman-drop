@@ -59,6 +59,11 @@ def lang_for(request: Request) -> str:
     return hit
 
 
+def other(lang: str) -> str:
+    """The other language — used for the manual switch link."""
+    return EN if lang == ZH else ZH
+
+
 # Every user-facing string, keyed. `{}`-style placeholders are filled in order.
 STRINGS: dict[str, dict[str, str]] = {
     "lang_zh": {ZH: "繁體中文", EN: "English"},
@@ -250,6 +255,10 @@ STRINGS: dict[str, dict[str, str]] = {
     "private_cloud_h": {ZH: "私人雲端", EN: "Private cloud"},
     "back_home": {ZH: "回私人模式首頁", EN: "Back to private mode"},
     "docs_kicker": {ZH: "文件", EN: "Docs"},
+    "docs_zh_only": {
+        ZH: "文件內容目前僅有繁體中文版本。",
+        EN: "The guide content is currently Traditional Chinese only.",
+    },
 }
 
 

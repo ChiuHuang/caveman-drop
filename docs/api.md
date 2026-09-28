@@ -78,7 +78,25 @@ curl -F file=@photo.jpg -F 'description=2026 澎湖行' http://localhost:20042/a
 - `GET /api/public/single/{file_id}`：單檔資訊與直連。
 - `GET /dl/s/{file_id}`：下載（`?preview=1` 預覽）。
 
-## 私人（密碼 session 或 `?token=` 手機 token）
+## 經代理的客戶端：`?auth=`
+
+CORS 型代理（`https://proxy.example/https://this.host/...`）會轉送請求，但
+`Set-Cookie` 回不到瀏覽器，所以 cookie session 在那條路徑上無效。碰到這種
+情況，**每個請求**都帶上 `?auth=<PASSWORD>`：
+
+```bash
+curl "https://proxy.example/https://this.host/api/files?auth=YOUR_PASSWORD"
+curl -F file=@big.iso "https://proxy.example/https://this.host/api/upload_chunk?auth=YOUR_PASSWORD" \
+     -F upload_id=... -F index=0 -F filename=big.iso
+```
+
+- 只在 **HTTPS** 下生效（明文連線會拒絕）。
+- 密碼不會被寫回任何回應或轉址；`/login?auth=...` 會立刻 303 到 `/`，把參數
+  丟掉。
+- 同一 IP 連續 10 次猜錯就鎖 10 分鐘（回 429）。
+- 密碼會出現在網址列／proxy 日誌，請只在受信任的環境使用。
+
+## 私人（密碼 session、`?auth=` 或 `?token=` 手機 token）
 
 | 方法 | 路徑 | 說明 |
 |---|---|---|

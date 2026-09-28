@@ -54,6 +54,7 @@ from ..storage import (
 )
 from ..i18n import lang_for, t
 from ..ui import page, private_panel, share_file_rows, thread_panel
+from ..auth import authed, query_auth_ok
 from ..urls import base_url
 
 router = APIRouter()
@@ -89,13 +90,19 @@ class MovePayload(BaseModel):
 
 
 def _need_admin(request: Request) -> None:
-    if not request.session.get("auth"):
+    if request.session.get("auth"):
+        return
+    if not query_auth_ok(request, raising=wants_html(request)):
         raise HTTPException(401, "Login required")
 
 
 def _check_private(request: Request) -> None:
-    if not request.session.get("auth") and request.query_params.get("token") != settings.mobile_token:
+    if request.session.get("auth") or request.query_params.get("token") == settings.mobile_token:
+        return
+    if not query_auth_ok(request, raising=False):
         raise HTTPException(401)
+
+
 
 
 @router.get("/m/{token}")
@@ -153,7 +160,7 @@ async def private_probe(request: Request, probe: UploadFile = File(...), ms: Opt
 
 @router.post("/api/folders")
 async def create_folder(request: Request, payload: MkdirPayload):
-    if not request.session.get("auth"):
+    if not authed(request):
         raise HTTPException(401)
     fid, meta = create_private_folder(payload.name)
     return {"success": True, "folder_id": fid, "name": meta["name"]}
@@ -161,7 +168,7 @@ async def create_folder(request: Request, payload: MkdirPayload):
 
 @router.get("/api/folders")
 async def list_folders(request: Request):
-    if not request.session.get("auth"):
+    if not authed(request):
         if wants_html(request):
             return RedirectResponse("/login", status_code=303)
         return JSONResponse(status_code=401, content={"error": "unauthorized"})
@@ -196,7 +203,7 @@ async def list_folders(request: Request):
 
 @router.get("/deldir/{folder_id}")
 async def delete_folder(request: Request, folder_id: str):
-    if not request.session.get("auth"):
+    if not authed(request):
         if wants_html(request):
             return RedirectResponse(url="/login", status_code=303)
         return JSONResponse(status_code=401, content={"error": "unauthorized"})
@@ -208,7 +215,7 @@ async def delete_folder(request: Request, folder_id: str):
 
 @router.post("/api/folders/{folder_id}/share")
 async def share_folder(request: Request, folder_id: str, payload: SharePayload):
-    if not request.session.get("auth"):
+    if not authed(request):
         raise HTTPException(401)
     token, meta = create_share(folder_id, payload.mode)
     base = base_url(request)
@@ -217,7 +224,7 @@ async def share_folder(request: Request, folder_id: str, payload: SharePayload):
 
 @router.post("/api/share/revoke")
 async def unshare(request: Request, payload: dict):
-    if not request.session.get("auth"):
+    if not authed(request):
         raise HTTPException(401)
     ok = revoke_share(str(payload.get("token", "")))
     if not ok:
@@ -413,7 +420,7 @@ async def merge_chunks(request: Request, payload: MergePayload):
 
 @router.get("/api/files")
 async def api_files(request: Request):
-    if not request.session.get("auth"):
+    if not authed(request):
         if wants_html(request):
             return RedirectResponse("/login", status_code=303)
         return JSONResponse(status_code=401, content={"error": "unauthorized"})
@@ -552,7 +559,7 @@ async def view_file(file_id: str):
 
 @router.get("/del/{file_id}")
 async def delete_file(request: Request, file_id: str):
-    if not request.session.get("auth"):
+    if not authed(request):
         if wants_html(request):
             return RedirectResponse(url="/login", status_code=303)
         return JSONResponse(status_code=401, content={"error": "unauthorized"})
