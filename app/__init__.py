@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import os
 import time
 from contextlib import asynccontextmanager
@@ -15,6 +16,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from . import storage
 from .config import settings
+from .i18n import lang_for, t
 from .negotiation import wants_html
 from .routes import docs, pages, private_api, public_api, system
 from .ui import page
@@ -66,12 +68,14 @@ def create_app() -> FastAPI:
     @app.exception_handler(404)
     async def not_found(request: Request, _exc: Exception):
         if wants_html(request):
+            lang = lang_for(request)
             return HTMLResponse(
                 page(
-                    "找不到",
+                    t(lang, "not_found"),
                     '<mdui-card variant="outlined" class="card-pad">'
-                    "<h1>404</h1><p>這個網址沒有東西。</p>"
-                    '<a href="/"><mdui-button>回首頁</mdui-button></a></mdui-card>',
+                    f"<h1>404</h1><p>{html.escape(t(lang, 'not_found_any'))}</p>"
+                    f'<a href="/"><mdui-button>{html.escape(t(lang, "nav_home"))}</mdui-button></a></mdui-card>',
+                    lang=lang,
                 ),
                 status_code=404,
             )

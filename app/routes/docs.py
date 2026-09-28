@@ -11,9 +11,10 @@ import os
 
 import markdown as md_lib
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 
 from ..negotiation import wants_html
+from ..i18n import lang_for, t
 from ..ui import page
 
 router = APIRouter()
@@ -21,10 +22,11 @@ router = APIRouter()
 DOCS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "docs")
 
 PAGES = [
-    ("index", "介紹"),
-    ("quickstart", "快速開始"),
-    ("api", "API 參考"),
-    ("limits", "限制與規範"),
+    ("index", "介紹", "Overview"),
+    ("quickstart", "快速開始", "Quick start"),
+    ("api", "API 參考", "API reference"),
+    ("limits", "限制與規範", "Limits"),
+    ("legal", "法律條款", "Legal"),
 ]
 
 _md = md_lib.Markdown(extensions=["fenced_code", "tables"])
@@ -38,9 +40,10 @@ def _load(slug: str) -> str | None:
         return f.read()
 
 
-def _docs_shell(active: str, body_html: str) -> str:
+def _docs_shell(lang: str, active: str, body_html: str) -> str:
     items = []
-    for slug, title in PAGES:
+    for slug, zh_title, en_title in PAGES:
+        title = zh_title if lang == "zh-TW" else en_title
         cls = "mdui-list-item-active" if slug == active else ""
         href = "/docs" if slug == "index" else f"/docs/{slug}"
         items.append(
@@ -48,7 +51,7 @@ def _docs_shell(active: str, body_html: str) -> str:
             f"{html.escape(title)}</mdui-list-item>"
         )
     return page(
-        "Docs",
+        t(lang, "docs_kicker"),
         f"""<div class="docs-layout">
       <mdui-card variant="outlined" class="card-pad docs-nav">
         <mdui-list>{"".join(items)}</mdui-list>
@@ -60,24 +63,31 @@ def _docs_shell(active: str, body_html: str) -> str:
       </mdui-card>
     </div>""",
         active="docs",
+        lang=lang,
     )
+
+
+@router.get("/legal")
+async def legal_alias(request: Request):
+    """/legal is a memorable alias for /docs/legal."""
+    return RedirectResponse("/docs/legal", status_code=303)
 
 
 @router.get("/docs")
 async def docs_index(request: Request):
     src = _load("index") or "# Docs\n\nMissing docs/index.md"
     if wants_html(request):
-        return HTMLResponse(_docs_shell("index", _md.convert(src)))
+        return HTMLResponse(_docs_shell(lang_for(request), "index", _md.convert(src)))
     return PlainTextResponse(src)
 
 
 @router.get("/docs/{slug}")
 async def docs_page(request: Request, slug: str):
-    if slug not in {s for s, _ in PAGES}:
+    if slug not in {s for s, _, _ in PAGES}:
         return PlainTextResponse("Doc page not found.", status_code=404)
     src = _load(slug)
     if src is None:
         return PlainTextResponse("Doc page not found.", status_code=404)
     if wants_html(request):
-        return HTMLResponse(_docs_shell(slug, _md.convert(src)))
+        return HTMLResponse(_docs_shell(lang_for(request), slug, _md.convert(src)))
     return PlainTextResponse(src)

@@ -52,6 +52,7 @@ from ..storage import (
     tagged_threads,
     validate_upload_id,
 )
+from ..i18n import lang_for, t
 from ..ui import page, private_panel, share_file_rows, thread_panel
 from ..urls import base_url
 
@@ -288,16 +289,19 @@ async def share_page(request: Request, token: str):
     """Shared private folder: view-only or upload-capable, no login needed."""
     from ..ui import page as _page
 
+    lang = lang_for(request)
     share = get_share(token)
     if not share:
         if wants_html(request):
-            return HTMLResponse(_page("找不到", '<mdui-card class="card-pad"><p>連結無效或已被取消。</p></mdui-card>'), status_code=404)
+            body = '<mdui-card class="card-pad"><p>' + html.escape(t(lang, "share_invalid")) + "</p></mdui-card>"
+            return HTMLResponse(_page(t(lang, "not_found"), body, lang=lang), status_code=404)
         return PlainTextResponse("Share not found.", status_code=404)
     folders = get_private_folders()
     meta = folders.get(share["folder_id"])
     if not meta:
         if wants_html(request):
-            return HTMLResponse(_page("找不到", '<mdui-card class="card-pad"><p>資料夾已刪除。</p></mdui-card>'), status_code=404)
+            body = '<mdui-card class="card-pad"><p>' + html.escape(t(lang, "share_gone")) + "</p></mdui-card>"
+            return HTMLResponse(_page(t(lang, "not_found"), body, lang=lang), status_code=404)
         return PlainTextResponse("Folder not found.", status_code=404)
     name = meta.get("name", "")
     can_upload = share.get("mode") == "upload"
@@ -312,16 +316,17 @@ async def share_page(request: Request, token: str):
         return PlainTextResponse("\n".join(lines))
     for f in files:
         f["bytes"] = f.get("bytes", 0)
+    mode = t(lang, "share_can_upload" if can_upload else "share_view_only")
     up_card = f"""
           <mdui-card variant="outlined" class="card-pad">
-            <h2>上傳到此資料夾</h2>
-            <form action="/api/public/chunk" method="post" data-chunked data-merge="/api/share/merge_chunks" data-public="1" data-probe="/api/public/probe">
+            <h2>{html.escape(t(lang, "share_folder_h"))}</h2>
+            <form action="/api/public/chunk" method="post" data-chunked data-merge="/api/share/merge_chunks" data-public="1">
               <input type="hidden" name="token" value="{html.escape(token)}">
               <div class="form-row">
-                <input type="file" name="file" required>
-                <mdui-button type="submit">上傳</mdui-button>
+                <input type="file" name="file" multiple required>
+                <mdui-button type="submit" icon="cloud_upload">{html.escape(t(lang, "btn_upload"))}</mdui-button>
               </div>
-              {thread_panel()}
+              {thread_panel(lang)}
             </form>
             <div data-upload-result></div>
           </mdui-card>""" if can_upload else ""
@@ -331,16 +336,17 @@ async def share_page(request: Request, token: str):
             f"""
         <mdui-card variant="filled" class="card-pad hero">
           <h1>{html.escape(name)}</h1>
-          <p>分享資料夾 · {len(files)} 個檔案 · {"可上傳" if can_upload else "僅檢視"}</p>
+          <p>{html.escape(t(lang, "share_meta", n=len(files), mode=mode))}</p>
         </mdui-card>
         <div class="stack">
           <mdui-card variant="outlined" class="card-pad">
-            <h2>檔案（{len(files)}）</h2>
-            {share_file_rows(files, token, base)}
+            <h2>{html.escape(t(lang, "files_h", n=len(files)))}</h2>
+            {share_file_rows(lang, files, token, base)}
           </mdui-card>
           {up_card}
         </div>""",
             active="home",
+            lang=lang,
         )
     )
 
@@ -415,16 +421,20 @@ async def api_files(request: Request):
     if not wants_html(request):
         return {"files": files}
     base = base_url(request)
+    lang = lang_for(request)
     return HTMLResponse(
         page(
-            "私人檔案",
+            t(lang, "private_cloud_h"),
             f"""<mdui-card variant="filled" class="card-pad hero">
-          <h1>私人雲端</h1>
-          <p><a href="/">回私人模式首頁</a></p>
+          <h1>{html.escape(t(lang, "private_cloud_h"))}</h1>
+          <p><a href="/">{html.escape(t(lang, "back_home"))}</a></p>
         </mdui-card>
-        <div class="stack">{private_panel(files, base, get_private_folders(), get_shares())}</div>""",
+        <div class="stack">{private_panel(
+            lang, files, base, get_private_folders(), get_shares(),
+        )}</div>""",
             active="home",
             authed=True,
+            lang=lang,
         )
     )
 

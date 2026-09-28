@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import html
+
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse
 
 from ..config import settings
 from ..negotiation import wants_html
+from ..i18n import lang_for, t
 from ..ui import endpoint_card, page
 from ..urls import base_url
 
@@ -18,6 +21,12 @@ def _api_payload(request: Request) -> dict:
     return {
         "name": "CaveMan Drop public API",
         "description": "Anonymous file sharing. Upload a file, get a permanent share link back. No auth required. file_id is the sha256 of the content, so identical files are stored once.",
+        "language": (
+            "Browser UI language follows the client IP: Traditional Chinese (zh-TW) for "
+            "Taiwan ranges (1.32.208.0/21, 36.224.0.0/12, 120.120.0.0-120.123.255.255, "
+            "220.135.0.0/16), English everywhere else. Force it with ?lang=zh-TW or "
+            "?lang=en. JSON and text output is always English."
+        ),
         "storage": {
             "file_id": "sha256 hex of the file bytes (same content = same id and link)",
             "blob_store": "bytes are stored once under BIN_DIR (default bin/); re-uploading an identical file reuses that copy",
@@ -102,6 +111,20 @@ def _api_payload(request: Request) -> dict:
                 "method": "GET",
                 "url": f"{base}/api/llms.txt",
             },
+            "speed_probe": {
+                "method": "POST",
+                "url": f"{base}/api/public/probe",
+                "notes": (
+                    "Optional diagnostic for scripts: POST a blob to get a thread count and "
+                    "the measured Mbps. Optional `ms` field with your own duration. The "
+                    "browser does not use it — it adapts from the first chunks it uploads."
+                ),
+            },
+            "legal": {
+                "method": "GET",
+                "url": f"{base}/legal",
+                "notes": "Terms of service, acceptable use, Taiwan copyright takedown procedure, privacy. Bilingual zh-TW / English; /legal redirects to /docs/legal.",
+            },
             "browse_page": {
                 "method": "GET",
                 "url": f"{base}/f/{{folder_id}}",
@@ -114,31 +137,43 @@ def _api_payload(request: Request) -> dict:
 @router.get("/api")
 async def api_root(request: Request):
     if wants_html(request):
-        return HTMLResponse(
-            page(
-                "API",
-                """<mdui-card variant="filled" class="card-pad hero">
-          <h1>API 索引</h1>
-          <p>以下每個端點：程式與 AI 拿到 JSON（加 <code>?format=json</code> 可強制），瀏覽器則看到 MDUI 控制台。</p>
+        lang = lang_for(request)
+        zh = lang == "zh-TW"
+        cards = [
+            ("POST", "/api/public/upload", "匿名上傳 — multipart 欄位 'file'，選填 'folder'。", "/upload"),
+            ("POST", "/api/public/chunk → /api/public/merge_chunks", "分段上傳：先傳分塊再合併，大檔案自動使用。", "/upload"),
+            ("POST", "/api/public/folder", "建立空資料夾，回傳分享與上傳網址。", "/upload"),
+            ("GET", "/api/public/folder/{folder_id}", "資料夾資訊、檔案清單與下載網址。", None),
+            ("GET", "/api/public/file/{folder_id}/{file_id}", "單一檔案資訊與下載網址。", None),
+            ("GET", "/dl/pub/{folder_id}/{file_id}", "下載檔案本體。支援 Range 續傳 / 並行。", None),
+            ("GET", "/usercontent/{code}.{ext}", "短網址：sha256 前綴，immutable，可進 CDN。", None),
+            ("GET", "/api/files", "私人檔案清單（需密碼登入）。", "/login"),
+            ("POST", "/api/upload_chunk + /api/merge_chunks", "私人分段上傳（登入後不限速）。", "/login"),
+        ]
+        en_cards = [
+            ("POST", "/api/public/upload", "Anonymous upload: multipart field 'file', optional 'folder'.", "/upload"),
+            ("POST", "/api/public/chunk → /api/public/merge_chunks", "Chunked upload, automatic for large files.", "/upload"),
+            ("POST", "/api/public/folder", "Create an empty public folder, get share and upload URLs.", "/upload"),
+            ("GET", "/api/public/folder/{folder_id}", "Folder metadata, file list and download URLs.", None),
+            ("GET", "/api/public/file/{folder_id}/{file_id}", "Single file metadata and download URL.", None),
+            ("GET", "/dl/pub/{folder_id}/{file_id}", "Download bytes. Supports Range for resume/parallel.", None),
+            ("GET", "/usercontent/{code}.{ext}", "Short link: sha256 prefix, immutable, CDN friendly.", None),
+            ("GET", "/api/files", "Private file list (password required).", "/login"),
+            ("POST", "/api/upload_chunk + /api/merge_chunks", "Private chunked upload (unthrottled when signed in).", "/login"),
+        ]
+        rows = (cards if zh else en_cards)
+        body = f"""<mdui-card variant="filled" class="card-pad hero">
+          <h1>{html.escape(t(lang, "api_index_h"))}</h1>
+          <p>{html.escape(t(lang, "api_index_p"))}</p>
           <div class="form-row">
-            <a href="/llms.txt"><mdui-button variant="outlined">給 AI 的 llms.txt</mdui-button></a>
-            <a href="/docs/api"><mdui-button variant="text">完整參考</mdui-button></a>
+            <a href="/llms.txt"><mdui-button variant="outlined">{html.escape(t(lang, "ai_docs"))}</mdui-button></a>
+            <a href="/docs/api"><mdui-button variant="text">{html.escape(t(lang, "full_ref"))}</mdui-button></a>
           </div>
         </mdui-card>
         <div class="stack">
-        """
-                + endpoint_card("POST", "/api/public/upload", "匿名上傳 — multipart 欄位 'file'，選填 'folder'。", "/upload")
-                + endpoint_card("POST", "/api/public/chunk → /api/public/merge_chunks", "分段上傳：先傳分塊再合併，大檔案自動使用。", "/upload")
-                + endpoint_card("POST", "/api/public/folder", "建立空資料夾，回傳分享與上傳網址。", "/upload")
-                + endpoint_card("GET", "/api/public/folder/{folder_id}", "資料夾資訊、檔案清單與下載網址。", None)
-                + endpoint_card("GET", "/api/public/file/{folder_id}/{file_id}", "單一檔案資訊與下載網址。", None)
-                + endpoint_card("GET", "/dl/pub/{folder_id}/{file_id}", "下載檔案本體。支援 Range 續傳 / 並行。", None)
-                + endpoint_card("GET", "/api/files", "私人檔案清單（需密碼登入）。", "/login")
-                + endpoint_card("POST", "/api/upload_chunk + /api/merge_chunks", "私人分段上傳（登入後不限速）。", "/login")
-                + "</div>",
-                active="api",
-            )
-        )
+        {"".join(endpoint_card(lang, m, pth, d, h) for m, pth, d, h in rows)}
+        </div>"""
+        return HTMLResponse(page(t(lang, "api_h"), body, active="api", lang=lang))
     return _api_payload(request)
 
 
@@ -186,10 +221,12 @@ Optional JSON `{{"name": "free text"}}`. Returns a folder_id plus `folder_url`,
 POST {base}/api/public/chunk (multipart: `file_chunk`, `upload_id` (uuid),
 `index` (0-based), `filename`) — send parts in parallel, then
 POST {base}/api/public/merge_chunks (JSON: `upload_id`, `filename`,
-`total_chunks`, optional `folder`) to assemble. Returns the same payload
-as the single-POST upload. POST 2 MB to /api/public/probe first for a
-speed-based thread recommendation (slow links get 32/64/128); send the
-milliseconds your own client measured as `ms` if you can measure it.
+`total_chunks`, optional `folder`, optional `description`) to assemble.
+Returns the same payload as the single-POST upload. The browser starts with
+16 parts in flight and adapts the count from the throughput of the first few
+parts (byte-level upload progress, not latency), so slow links go to 32/64/128.
+Scripts that want a recommendation can POST {base}/api/public/probe, optionally
+with an `ms` field carrying their own measured duration.
 
 ## Single direct files
 GET {base}/api/public/single/{{file_id}} — metadata + direct URL.
@@ -221,6 +258,24 @@ GET {base}/api (JSON index)
 - Upload rate limit: {rate} attempts per IP per {window_min} minutes.
 - Fair use: heavy uploaders are transparently slowed down; logged-in
   sessions are exempt.
+- Identical bytes are stored once: `file_id` is the SHA-256 of the
+  content, so re-uploading the same file reuses the blob.
+
+## Legal
+GET {base}/legal  (bilingual zh-TW / English)
+Terms of service, acceptable use, the Taiwan copyright notice-and-takedown
+procedure (著作權法第六章之一 + 民事免責事由實施辦法; there is no DMCA in
+Taiwan), privacy, and the takedown contact. Upload only content you own or
+are authorised to share; child sexual abuse material (兒童及少年性剝削防制條例
+§36/§38/§39, 24-hour removal duty under §8) is strictly prohibited and
+reported to the competent authorities.
+
+## Language
+Browser pages render in Traditional Chinese for client IPs in the Taiwan
+ranges (1.32.208.0/21, 36.224.0.0/12, 120.120.0.0-120.123.255.255,
+220.135.0.0/16) and in English for every other IP. Add ?lang=zh-TW or
+?lang=en to any page to force one. JSON, plain text and this document are
+always English.
 
 AI agents should prefer the JSON API endpoints above and use the returned `url` or `download_url` directly.
 """

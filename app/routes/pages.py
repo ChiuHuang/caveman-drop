@@ -24,6 +24,7 @@ from ..storage import (
     public_folder_name,
     short_code,
 )
+from ..i18n import lang_for, t
 from ..ui import file_rows, page, private_panel, public_upload_form
 from ..urls import base_url
 
@@ -32,46 +33,49 @@ router = APIRouter()
 
 def _dashboard_html(request: Request, authed: bool) -> str:
     base = base_url(request)
+    lang = lang_for(request)
     if authed:
         return page(
-            "私人模式",
+            t(lang, "private_h1"),
             f"""
         <mdui-card variant="filled" class="card-pad hero">
-          <h1>私人模式</h1>
-          <p>已登入</p>
+          <h1>{html.escape(t(lang, "private_h1"))}</h1>
+          <p>{html.escape(t(lang, "private_logged_in"))}</p>
           <div class="form-row">
-            <a href="/api/files"><mdui-button variant="outlined">檔案 API</mdui-button></a>
-            <a href="/logout"><mdui-button variant="text">登出</mdui-button></a>
+            <a href="/api/files"><mdui-button variant="outlined">{html.escape(t(lang, "files_api"))}</mdui-button></a>
+            <a href="/logout"><mdui-button variant="text">{html.escape(t(lang, "nav_logout"))}</mdui-button></a>
           </div>
         </mdui-card>
         <div class="stack">
           {private_panel(
-            private_files(), base, get_private_folders(), get_shares(),
+            lang, private_files(), base, get_private_folders(), get_shares(),
             public_files(), public_folder_list(),
           )}
         </div>""",
             active="home",
             authed=True,
+            lang=lang,
         )
     return page(
-        "首頁",
+        t(lang, "nav_home"),
         f"""
         <mdui-card variant="filled" class="card-pad hero">
           <h1>CaveMan Drop</h1>
-          <p>免帳號的匿名檔案分享。傳檔後立刻拿到永久連結。</p>
+          <p>{html.escape(t(lang, "tagline"))}</p>
           <div class="form-row">
-            <a href="/docs"><mdui-button variant="text">使用文件</mdui-button></a>
-            <a href="/login"><mdui-button variant="outlined">登入</mdui-button></a>
+            <a href="/docs"><mdui-button variant="text">{html.escape(t(lang, "home_docs"))}</mdui-button></a>
+            <a href="/login"><mdui-button variant="outlined">{html.escape(t(lang, "home_login"))}</mdui-button></a>
           </div>
         </mdui-card>
         <div class="stack">
           <mdui-card variant="outlined" class="card-pad">
-            <h2>公開上傳</h2>
-            {public_upload_form()}
+            <h2>{html.escape(t(lang, "public_upload_h"))}</h2>
+            {public_upload_form(lang)}
           </mdui-card>
         </div>""",
         active="home",
         authed=False,
+        lang=lang,
     )
 
 
@@ -132,22 +136,28 @@ async def index(request: Request):
     return PlainTextResponse(_index_text(request, authed))
 
 
-def _login_html(error: str = "") -> str:
-    err = f'<mdui-card variant="filled" class="card-pad"><p>{html.escape(error)}</p></mdui-card>' if error else ""
+def _login_html(request: Request, error: str = "") -> str:
+    lang = lang_for(request)
+    err = (
+        f'<mdui-card variant="filled" class="card-pad"><p>{html.escape(error)}</p></mdui-card>'
+        if error
+        else ""
+    )
     return page(
-        "登入",
+        t(lang, "nav_login"),
         f"""{err}
         <mdui-card variant="outlined" class="card-pad">
-          <h2>登入私人模式</h2>
-          <p>登入後只會看到私人空間，不再顯示公開上傳。公開上傳不需要登入。</p>
+          <h2>{html.escape(t(lang, "login_h"))}</h2>
+          <p>{html.escape(t(lang, "login_p"))}</p>
           <form action="/login" method="post">
             <div class="form-row">
-              <mdui-text-field type="password" name="password" label="密碼" required></mdui-text-field>
-              <mdui-button type="submit">登入</mdui-button>
+              <mdui-text-field type="password" name="password" label="{html.escape(t(lang, "login_pw"))}" required></mdui-text-field>
+              <mdui-button type="submit">{html.escape(t(lang, "login_btn"))}</mdui-button>
             </div>
           </form>
         </mdui-card>""",
         active="login",
+        lang=lang,
     )
 
 
@@ -156,7 +166,7 @@ async def login_get(request: Request):
     if wants_html(request):
         if request.session.get("auth"):
             return RedirectResponse("/", status_code=303)
-        return HTMLResponse(_login_html())
+        return HTMLResponse(_login_html(request))
     if request.session.get("auth"):
         return PlainTextResponse("Already authenticated. Use GET / for the server description.")
     return PlainTextResponse(
@@ -174,7 +184,7 @@ async def login_post(request: Request, password: str = Form(...)):
             return RedirectResponse("/", status_code=303)
         return PlainTextResponse("Login successful. GET / for the server description.")
     if wants_html(request):
-        return HTMLResponse(_login_html("密碼錯誤，請再試一次。"), status_code=401)
+        return HTMLResponse(_login_html(request, t(lang, "login_err")), status_code=401)
     return PlainTextResponse("Wrong password.", status_code=401)
 
 
@@ -186,27 +196,29 @@ async def logout(request: Request):
     return PlainTextResponse("Logged out.")
 
 
-def _upload_html() -> str:
+def _upload_html(request: Request) -> str:
+    lang = lang_for(request)
     return page(
-        "上傳",
+        t(lang, "nav_upload"),
         f"""
         <mdui-card variant="filled" class="card-pad hero">
-          <h1>公開上傳</h1>
-          <p>免帳號，上傳後立刻拿到永久連結。</p>
+          <h1>{html.escape(t(lang, "upload_h1"))}</h1>
+          <p>{html.escape(t(lang, "tagline"))}</p>
         </mdui-card>
         <div class="stack">
           <mdui-card variant="outlined" class="card-pad">
-            <h2>上傳檔案</h2>
-            {public_upload_form()}
+            <h2>{html.escape(t(lang, "upload_files_h"))}</h2>
+            {public_upload_form(lang)}
           </mdui-card>
           <mdui-card variant="outlined" class="card-pad">
-            <h2>curl 用法</h2>
+            <h2>{html.escape(t(lang, "curl_h"))}</h2>
             <pre class="curl">curl -F file=@example.bin /api/public/upload
 curl -F file=@example.bin -F folder=FOLDER_ID /api/public/upload
-curl -F file=@example.bin -F folder=我的資料夾 /api/public/upload</pre>
+curl -F file=@example.bin -F folder=my-folder /api/public/upload</pre>
           </mdui-card>
         </div>""",
         active="upload",
+        lang=lang,
     )
 
 
@@ -241,7 +253,7 @@ async def upload_page(request: Request):
             return RedirectResponse("/", status_code=303)
         return PlainTextResponse(_upload_text(request))
     if wants_html(request):
-        return HTMLResponse(_upload_html())
+        return HTMLResponse(_upload_html(request))
     return PlainTextResponse(_upload_text(request))
 
 
@@ -253,43 +265,45 @@ def _folder_html(request: Request, folder_id: str) -> HTMLResponse | None:
     if not _os.path.isdir(public_folder_dir(folder_id)):
         return None
     base = base_url(request)
+    lang = lang_for(request)
     authed = bool(request.session.get("auth"))
     files = public_folder_files(folder_id)
     for f in files:
         f["download_url"] = f"{base}/dl/pub/{folder_id}/{f['id']}"
         f["short_url"] = f"{base}/usercontent/{short_code(f['id'])}{f.get('ext', '')}"
-    rows = file_rows(files, folder_id, base)
-    title = public_folder_name(folder_id) or "公開資料夾"
+    rows = file_rows(lang, files, folder_id, base)
+    title = public_folder_name(folder_id) or t(lang, "unnamed_folder")
     if authed:
-        add_card = """
+        add_card = f"""
           <mdui-card variant="outlined" class="card-pad">
-            <h2>加入檔案</h2>
-            <p class="muted">目前為私人模式。如需上傳公開檔案，請先登出。</p>
-            <a href="/logout"><mdui-button variant="outlined">登出以上傳公開檔案</mdui-button></a>
+            <h2>{html.escape(t(lang, "add_here_h"))}</h2>
+            <p class="muted">{html.escape(t(lang, "private_mode_note"))}</p>
+            <a href="/logout"><mdui-button variant="outlined">{html.escape(t(lang, "signout_first"))}</mdui-button></a>
           </mdui-card>"""
     else:
         add_card = f"""
           <mdui-card variant="outlined" class="card-pad">
-            <h2>加入檔案到此資料夾</h2>
-            {public_upload_form(folder_id)}
+            <h2>{html.escape(t(lang, "add_here_h"))}</h2>
+            {public_upload_form(lang, folder_id)}
           </mdui-card>"""
     body = page(
         title,
         f"""
         <mdui-card variant="filled" class="card-pad hero">
           <h1>{html.escape(title)}</h1>
-          <p>公開資料夾 · {len(files)} 個檔案
-          <mdui-button variant="text" data-copy="{base}/f/{folder_id}">複製分享連結</mdui-button></p>
+          <p>{html.escape(t(lang, "folder_public", n=len(files)))}
+          <mdui-button variant="text" data-copy="{base}/f/{folder_id}">{html.escape(t(lang, "copy_share"))}</mdui-button></p>
         </mdui-card>
         <div class="stack">
           <mdui-card variant="outlined" class="card-pad">
-            <h2>檔案（{len(files)}）</h2>
+            <h2>{html.escape(t(lang, "files_h", n=len(files)))}</h2>
             {rows}
           </mdui-card>
           {add_card}
         </div>""",
         active="upload",
         authed=authed,
+        lang=lang,
     )
     return HTMLResponse(body)
 
@@ -336,8 +350,13 @@ async def folder_page(request: Request, folder_id: str):
     if wants_html(request):
         html_resp = _folder_html(request, folder_id)
         if html_resp is None:
+            lang = lang_for(request)
             return HTMLResponse(
-                page("找不到", '<mdui-card class="card-pad"><p>找不到這個資料夾。</p></mdui-card>'),
+                page(
+                    t(lang, "not_found"),
+                    '<mdui-card class="card-pad"><p>' + html.escape(t(lang, "not_found_folder")) + "</p></mdui-card>",
+                    lang=lang,
+                ),
                 status_code=404,
             )
         return html_resp

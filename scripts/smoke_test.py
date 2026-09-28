@@ -27,7 +27,7 @@ assert r.text.startswith("CaveMan Drop")
 r = c.get("/api", headers=J)
 print("curl /api:", r.status_code, sorted(r.json().keys()))
 r = c.get("/api", headers=B)
-assert "API 索引" in r.text
+assert "API index" in r.text
 print("browser /api OK")
 
 r = c.get("/llms.txt", headers=J)
@@ -36,10 +36,9 @@ print("llms OK")
 
 r = c.get("/upload", headers=B)
 assert "data-chunked" in r.text and "data-tp-segs" in r.text
-assert "單檔上限 5 GB" in r.text and "超量自動降速。" in r.text
-assert "先說好" not in r.text
-assert "建立資料夾" in r.text and "data-tabs" in r.text
-assert "留空＝只給單檔永久連結" not in r.text, "helper copy should stay out of the way"
+assert "Up to 5 GB per file" in r.text and "throttled past that" in r.text
+assert "Create folder" in r.text and "data-tabs" in r.text
+assert "Description (optional)" in r.text
 print("browser /upload OK (thread panel present)")
 
 r = c.get("/docs", headers=B)
@@ -48,6 +47,79 @@ print("browser /docs OK")
 r = c.get("/docs/api", headers=J)
 assert r.text.startswith("# API 參考")
 print("curl /docs/api OK")
+
+# --- legal page: bilingual, Taiwan law, reachable at /legal ---
+lg = c.get("/docs/legal", headers=J)
+assert lg.text.startswith("# 法律條款 / Legal"), lg.text[:40]
+for cite in ("第六章之一", "民事免責事由實施辦法", "兒童及少年性剝削防制條例",
+             "刑法", "個人資料保護法", "通信秘密保障法", "24 小時內", "7 個工作天",
+             "319 條之 3", "第 38 條"):
+    assert cite in lg.text, f"missing Taiwan-law citation: {cite}"
+assert "中華民國" in lg.text and "Republic of China (Taiwan)" in lg.text
+assert "臺灣沒有美國 DMCA" in lg.text, "must state that the DMCA regime does not apply here"
+for absent in ("Digital Millennium", "mainland", "中華人民共和國", "PRC", "Cybersecurity Law",
+               "PIPL", "censor"):
+    assert absent not in lg.text, f"wrong-jurisdiction text leaked in: {absent}"
+lgb = c.get("/docs/legal", headers=B)
+assert "docs-layout" in lgb.text and "Legal" in lgb.text
+r = c.get("/legal", headers=B, follow_redirects=False)
+assert r.status_code == 303 and r.headers["location"] == "/docs/legal"
+h = c.get("/", headers=B).text
+assert 'class="legalbar"' in h
+assert h.index("legalbar") > h.index("Public upload"), "legal must be at the bottom"
+assert "data-tos" not in h
+print("legal page OK (zh-TW + English, Taiwan law, bottom of page)")
+
+# --- language follows the client IP: zh-TW for Taiwan ranges, English elsewhere ---
+TW = {**B, "CF-Connecting-IP": "120.122.9.9"}
+EN_IP = {**B, "CF-Connecting-IP": "8.8.8.8"}
+zh = c.get("/", headers=TW).text
+en = c.get("/", headers=EN_IP).text
+assert 'lang="zh-TW"' in zh
+assert "免帳號的匿名檔案分享" in zh and "首頁" in zh and "公開上傳" in zh
+assert 'lang="en"' in en
+assert "Anonymous file sharing" in en and "Home" in en and "Public upload" in en
+assert "首頁" not in en and "免帳號" not in en, "non-Taiwan IP must not get Chinese"
+# ?lang override wins over the IP
+assert "免帳號" in c.get("/?lang=zh-TW", headers=EN_IP).text
+assert "Anonymous file sharing" in c.get("/?lang=en", headers=TW).text
+# every page renders in both languages
+for path in ("/", "/upload", "/login", "/api", "/docs", "/legal"):
+    a = c.get(path, headers=TW)
+    b = c.get(path, headers=EN_IP)
+    assert a.status_code == b.status_code == 200, (path, a.status_code, b.status_code)
+    assert 'lang="zh-TW"' in a.text, f"{path} should be zh-TW for a Taiwan IP"
+    assert 'lang="en"' in b.text, f"{path} should be English for a non-Taiwan IP"
+zh_up = c.get("/upload", headers=TW).text
+en_up = c.get("/upload", headers=EN_IP).text
+assert "建立資料夾" in zh_up and "Create folder" in en_up
+assert "說明（選填）" in zh_up and "Description (optional)" in en_up
+assert "單檔上限 5 GB" in zh_up and "Up to 5 GB per file" in en_up
+# admin pages too
+adm = TestClient(app)
+adm.post("/login", data={"password": "passw"})
+zh_adm = adm.get("/", headers=TW).text
+en_adm = adm.get("/", headers=EN_IP).text
+assert "私人模式" in zh_adm and "已登入" in zh_adm
+assert "Private mode" in en_adm and "Signed in" in en_adm
+assert "全部（" in zh_adm and "All (" in en_adm
+# Taiwan range boundaries from the brief
+for ip in ("1.32.208.0", "1.32.215.255", "36.224.0.0", "36.239.255.255", "120.120.0.0",
+           "120.121.5.5", "120.123.255.255", "220.135.0.0", "220.135.255.255"):
+    assert 'lang="zh-TW"' in c.get("/", headers={**B, "CF-Connecting-IP": ip}).text, ip
+for ip in ("1.32.207.255", "1.32.216.0", "36.223.255.255", "36.240.0.0", "120.119.255.255",
+           "120.124.0.0", "220.134.255.255", "220.136.0.0", "1.1.1.1"):
+    assert 'lang="en"' in c.get("/", headers={**B, "CF-Connecting-IP": ip}).text, ip
+print("language by client IP OK (zh-TW ranges vs English elsewhere)")
+
+# --- no probe request from the browser: it adapts from the first chunks ---
+r = c.get("/upload", headers=B)
+assert "data-probe" not in r.text, "browser must not fire a separate probe"
+assert 'data-chunked' in r.text
+js = open("app/static/app.js", encoding="utf-8").read()
+assert "ADAPT_CHUNKS" in js and "probeThroughput" not in js
+assert "xhr.upload.onprogress" in js, "upload speed must come from real progress events"
+print("first-chunk speed adaptation OK (no probe request)")
 
 # --- single upload: direct link, NO folder created ---
 import glob as _glob
@@ -89,7 +161,7 @@ assert len([n for n in os.listdir(os.path.dirname(bin_path(fid))) if n == fid]) 
 print("sha256 ids + bin dedupe OK")
 
 # --- short share code: /usercontent/<shortest unique prefix>.<ext> ---
-from app.storage import short_code, resolve_short_code, MIN_CODE, MAX_CODE
+from app.storage import short_code, resolve_short_code, MIN_CODE
 code = short_code(fid)
 assert code == fid[:MIN_CODE] and len(code) == 6, code
 assert resolve_short_code(code) == fid
@@ -152,7 +224,6 @@ g = c.get(f"/api/public/folder/{folder}", headers=J)
 assert g.status_code == 200 and len(g.json()["files"]) == 1
 g = c.get(f"/api/public/folder/{folder}", headers=B)
 assert "data-mt-download" in g.text and "data-preview" in g.text
-assert "16 線程下載" not in g.text
 print("folder json+html OK")
 
 d = c.get(f"/dl/pub/{folder}/{jfid}", headers=J)
@@ -160,7 +231,7 @@ assert d.status_code == 200 and d.content == b"joined"
 print("folder download OK")
 
 h = c.get(f"/f/{folder}", headers=B)
-assert "公開資料夾" in h.text and "加入檔案到此資料夾" in h.text
+assert "Public folder" in h.text and "Add files to this folder" in h.text
 assert "派對" in h.text and "<code>" not in h.text
 print("share page OK")
 
@@ -300,6 +371,11 @@ rr = c.post("/api/public/chunk", headers={**J, "CF-Connecting-IP": "5.6.7.8"},
 assert rr.json()["threads_tagged"] == 16
 from app.storage import threads_for_speed
 assert threads_for_speed(1024 * 1024) == 128 and threads_for_speed(20 * 1024 * 1024) == 16
+# 95 Mbps real throughput must land on 16 threads, not 64
+assert threads_for_speed(95 * 1_000_000 / 8) == 16, "95 Mbps should be 16 threads"
+assert threads_for_speed(40 * 1_000_000 / 8) == 32
+assert threads_for_speed(16 * 1_000_000 / 8) == 64
+assert threads_for_speed(8 * 1_000_000 / 8) == 128
 print("probe + IP tag OK")
 
 # --- login -> private mode, public upload hidden ---
@@ -310,11 +386,11 @@ assert r.status_code == 200
 print("login OK")
 
 r = c.get("/", headers=B)
-assert "私人模式" in r.text and "data-chunked" in r.text
-assert "已登入" in r.text and "不會顯示公開上傳" not in r.text
+assert "Private mode" in r.text and "data-chunked" in r.text
+assert "Signed in" in r.text
 # admin sees private + public in tabs, and drag targets everywhere
 assert 'value="all"' in r.text and 'value="public"' in r.text and 'value="folders"' in r.text
-assert "data-tos" in r.text, "top TOS strip"
+assert 'class="legalbar"' in r.text and '/legal' in r.text, "legal link at the bottom"
 assert "public upload form" not in r.text
 print("private-mode dashboard OK (admin tabs, all files, drop targets)")
 
@@ -323,7 +399,8 @@ assert r.status_code == 303, "logged-in /upload should redirect to /"
 print("logged-in /upload redirect OK")
 
 h = c.get(f"/f/{folder}", headers=B)
-assert "私人模式" in h.text and "加入檔案到此資料夾" not in h.text
+assert "data-chunked" not in h.text, "no upload form on the public folder page when signed in"
+assert "Sign out to upload" in h.text
 print("folder page hides upload form when logged in OK")
 
 # --- 16-thread style chunked upload (sequential here, same endpoints) ---
@@ -345,7 +422,7 @@ r = c.get("/api/files", headers=J)
 names = [x["name"] for x in r.json()["files"]]
 assert "big.bin" in names
 r = c.get("/", headers=B)
-assert "big.bin" in r.text and "直接連結" in r.text and "刪除" in r.text and "預覽" in r.text
+assert "big.bin" in r.text and "Direct link" in r.text and "Delete" in r.text and "Preview" in r.text
 assert "data-sortbar" in r.text and "data-sort-size" in r.text
 print("private file row buttons OK")
 
@@ -367,8 +444,8 @@ wfid = m2.json()["file_id"]
 fl = c.get("/api/folders", headers=J)
 assert any(x["id"] == pfolder and x["count"] == 1 for x in fl.json()["folders"])
 r = c.get("/", headers=B)
-assert "工作" in r.text and "data-delete-dir" in r.text and "未分類" in r.text
-assert "檢視連結" in r.text and "上傳連結" in r.text
+assert "工作" in r.text and "data-delete-dir" in r.text and "Uncategorised" in r.text
+assert "View link" in r.text and "Upload link" in r.text
 assert 'data-dropfolder="%s"' % pfolder in r.text, "folder card must be a drop target"
 assert 'data-dropscope="private"' in r.text and 'data-move=' in r.text
 assert "draggable=\"true\"" in r.text, "file rows must be draggable"
@@ -382,10 +459,10 @@ utok = su.json()["token"]
 assert su.json()["url"].endswith(f"/s/{utok}")
 
 sp = c.get(f"/s/{vtok}", headers=B)
-assert "工作" in sp.text and "w.txt" in sp.text and "僅檢視" in sp.text
-assert "上傳到此資料夾" not in sp.text
+assert "工作" in sp.text and "w.txt" in sp.text and "View only" in sp.text
+assert "Upload to this folder" not in sp.text
 sp = c.get(f"/s/{utok}", headers=B)
-assert "可上傳" in sp.text and "上傳到此資料夾" in sp.text
+assert "Can upload" in sp.text and "Upload to this folder" in sp.text
 sp = c.get(f"/s/{vtok}", headers=J)
 assert "mode: view" in sp.text
 

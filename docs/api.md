@@ -106,3 +106,14 @@ curl -F file=@photo.jpg -F 'description=2026 澎湖行' http://localhost:20042/a
 | `GET` | `/api` | 完整 JSON 索引（瀏覽器看 HTML 控制台） |
 | `GET` | `/llms.txt`、`/api/llms.txt` | 給 AI 的文件，永遠純文字 |
 | `GET` | `/docs`、`/docs/{page}` | 圖書館式指南（程式拿 Markdown 原文） |
+| `GET` | `/legal` | 法律條款（繁中／English），轉址到 `/docs/legal` |
+
+## 法律
+
+`/legal`（=`/docs/legal`）是繁體中文與 English 雙語的法律條款：服務範圍、
+可接受使用政策、**臺灣**著作權通知－取下流程（《著作權法》第六章之一 +
+《著作權民事免責事由實施辦法》，權利人補正期限 7 個工作天）、隱私。
+臺灣沒有 DMCA。兒少性影像零容忍（《兒童及少年性剝削防制條例》第 36、
+38、39 條，業者須於知悉後 24 小時內限制瀏覽或移除）。
+
+上傳前請確認你擁有內容或已獲授權。本頁不是法律意見。

@@ -5,6 +5,9 @@
 免帳號、純文字優先的檔案分享。從任何腳本、瀏覽器或 AI 上傳檔案——立刻拿回永久連結。公開分享不需要帳號。
 
 - **瀏覽器**在每個頁面與端點都看到 Material Design 3 介面（MDUI v2）。
+- **語言**跟著來源 IP：台灣網段（1.32.208.0/21、36.224.0.0/12、120.120–120.123、
+  220.135.0.0/16）給繁體中文，其他 IP 給 English。`?lang=zh-TW` / `?lang=en`
+  可覆寫（見 `app/i18n.py`）。
 - **腳本與 AI**（`curl`、Python、AI 工具）透過內容協商拿到純 JSON / 純文字。加上 `?format=json` 或 `?format=html` 可強制指定。
 - 機器可讀文件在 `/llms.txt`；完整 API 索引在 `/api`。
 - 登入後進入**私人模式**：只有私人空間，不再顯示公開上傳。
@@ -39,6 +42,7 @@ app/
   __init__.py        # FastAPI 工廠、中介層、錯誤頁
   config.py          # .env 設定（連接埠、密碼、限制、目錄）
   negotiation.py     # 瀏覽器 vs 程式的內容協商
+  i18n.py            # 依來源 IP 選語言（台灣網段中文、其他英文）＋字串表
   storage.py         # 檔案儲存、配額、速率限制、下載、sha256 bin
   urls.py            # 反向代理後仍正確的基底網址（https 進 → https 出）
   ui.py              # 全站共用 MDUI v2 繁中 HTML 外殼
@@ -94,6 +98,14 @@ Cloudflare 後面也能正確限速。登入 session 不限速。
 加長到 7、8 碼…，並帶 `Cache-Control: immutable`，網址永不失效，直接丟給
 Cloudflare 快取即可（`usercontent.qiuhuang.dev` 指向同一台機器的那個路徑）。
 上傳也可以帶自由文字說明：`description`（表單欄位或 merge 的 JSON key）。
+
+## 法律條款
+
+`/legal`（= `/docs/legal`）是繁中／English 雙語條款，套用**臺灣**法律：
+可接受使用政策、《著作權法》第六章之一的通知－取下流程（權利人補正期限
+7 個工作天；臺灣沒有 DMCA）、隱私。兒少性影像零容忍，依《兒童及少年性
+剝削防制條例》第 36／38／39 條，業者須於知悉後 24 小時內限制瀏覽或移除。
+每頁底部都有連到條款的連結。
 
 ## 文件
 

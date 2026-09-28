@@ -74,13 +74,15 @@ pre.curl code, .mdui-prose pre code { background: transparent; color: inherit; p
 mdui-card { --mdui-shape-corner-medium: 16px; }
 .dropzone { border: 2px dashed rgba(127,127,127,.5); border-radius: 16px; padding: 32px; text-align: center; cursor: pointer; }
 .dropzone.dragover { border-color: rgb(var(--mdui-color-primary)); background: rgba(127,127,127,.08); }
-/* 拖放上傳 */
-.tos {
-  display: flex; align-items: center; gap: 8px; font-size: .82rem; opacity: .75;
-  border: 1px solid rgba(127,127,127,.3); border-radius: 10px;
-  padding: 6px 8px 6px 12px; margin-bottom: 12px;
+/* 拖放上傳 + 頁尾條款 */
+.legalbar {
+  margin-top: 20px; padding-top: 12px; border-top: 1px solid rgba(127,127,127,.25);
+  display: flex; gap: 12px; flex-wrap: wrap; align-items: center;
+  font-size: .8rem; opacity: .7;
 }
-.tos span { flex: 1 1 auto; }
+.tos-short { flex: 1 1 100%; }
+.legal-links { display: flex; gap: 12px; flex-wrap: wrap; }
+.legal-links a { color: rgb(var(--mdui-color-primary)); }
 .drophint {
   position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
   background: rgb(var(--mdui-color-primary)); color: rgb(var(--mdui-color-on-primary));

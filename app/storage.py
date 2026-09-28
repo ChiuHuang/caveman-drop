@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import mimetypes
 import os
 import re
 import shutil
@@ -860,12 +859,16 @@ _probe_log: dict[str, deque] = defaultdict(deque)
 
 
 def threads_for_speed(bps: float) -> int:
-    MB = 1024 * 1024
-    if bps > 10 * MB:
+    """Upload speed -> connection count. Fast links want few sockets.
+
+    Thresholds are decimal MB/s so they line up with the Mbps numbers an ISP or
+    a speed test reports: >=80 Mbps -> 16, >=40 -> 32, >=16 -> 64, else 128.
+    """
+    if bps >= 10_000_000:
         return 16
-    if bps > 5 * MB:
+    if bps >= 5_000_000:
         return 32
-    if bps > 2 * MB:
+    if bps >= 2_000_000:
         return 64
     return 128
 

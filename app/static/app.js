@@ -2,7 +2,82 @@
 (function () {
   const THREADS = 16;
   const CHUNK = 4 * 1024 * 1024;
-  const PROBE_BYTES = 2 * 1024 * 1024;
+  // 用前幾個 chunk 決定並行數：量到 ADAPT_MS 的實際傳輸、或 ADAPT_CHUNKS 個塊
+  const ADAPT_MS = 2000;
+  const ADAPT_MAX_MS = 6000;
+  const ADAPT_CHUNKS = 6;
+  const ADAPT_BYTES = 4 * 1024 * 1024;
+
+  // 語言跟著 IP（見 app/i18n）：台灣網段中文，其他英文
+  const LANG = (document.documentElement && document.documentElement.dataset.lang) === "zh-TW"
+    ? "zh-TW" : "en";
+  const T = {
+    zh: {
+      copied: "連結已複製", copyFail: "複製失敗", needFile: "請先選擇檔案",
+      fail: "上傳失敗：", mergeFail: "合併失敗：", merging: "合併中…", done: "上傳完成",
+      folderMade: "資料夾已建立", folderFail: "無法建立資料夾", needName: "請輸入資料夾名稱",
+      mkdirOk: "資料夾已建立", mkdirFail: "建立失敗", shareOk: "分享連結已建立",
+      unshareOk: "已取消分享", unshareFail: "取消失敗", moveFail: "移動失敗",
+      moved: "已移到 ", movedOut: "已移出資料夾", noCross: "不能跨公開／私人移動",
+      switchTab: "先切到可以上傳的分頁", uploadedTo: "已上傳到 ", deleted: "已刪除",
+      deleteFail: "刪除失敗", dlDone: "下載完成", dlFail: "下載失敗，改用直接下載",
+      theme: "主題：", dark: "深色", light: "淺色", auto: "自動",
+      pause: "暫停", resume: "繼續", paused: "已暫停", idle: "待命中",
+      live: "上傳中 #", chunkDone: "完成 #", failed: "失敗",
+      segLabel: "分段：", threads: " · ", segUnit: " 線程",
+      speed: "{rate}/s（{mbps} Mbps）· {sent} / {total}{left}",
+      left: " · 剩 {t}", speedDone: "完成 · 平均 {rate}/s",
+      link: "連線 {mbps} Mbps · {n} 線程",
+      throttled: "分享頻寬限速中（約 {mbps} Mbps），上傳繼續",
+      sec: " 秒", min: " 分 ", hour: " 小時 ",
+      upDone: "上傳完成", folderCreated: "資料夾已建立",
+      stats: "{size} · {secs} 秒 · 平均 {rate}/s{dup}", dup: " · 內容已存在，未重複儲存",
+      rowLink: "連結", rowFile: "檔案", rowDirect: "直連", rowFolder: "資料夾",
+      copy: "複製", open: "開啟", preview: "預覽", close: "關閉",
+      dropUpload: "放開手上傳", dropInto: "放到「{name}」", dropFolder: "放到這個資料夾",
+      multi: "上傳 {i}/{n}：{name}", previewTitle: "預覽 — ",
+    },
+    en: {
+      copied: "Link copied", copyFail: "Copy failed", needFile: "Pick a file first",
+      fail: "Upload failed: ", mergeFail: "Merge failed: ", merging: "Merging…", done: "Upload complete",
+      folderMade: "Folder created", folderFail: "Could not create the folder", needName: "Give the folder a name",
+      mkdirOk: "Folder created", mkdirFail: "Could not create", shareOk: "Share link created",
+      unshareOk: "Share revoked", unshareFail: "Could not revoke", moveFail: "Move failed",
+      moved: "Moved to ", movedOut: "Removed from folder", noCross: "Cannot move across public and private",
+      switchTab: "Switch to an upload tab first", uploadedTo: "Uploaded to ", deleted: "Deleted",
+      deleteFail: "Delete failed", dlDone: "Download complete", dlFail: "Download failed, using a direct link",
+      theme: "Theme: ", dark: "Dark", light: "Light", auto: "Auto",
+      pause: "Pause", resume: "Resume", paused: "Paused", idle: "Idle",
+      live: "Uploading #", chunkDone: "Done #", failed: "Failed",
+      segLabel: "Segments: ", threads: " · ", segUnit: " threads",
+      speed: "{rate}/s ({mbps} Mbps) · {sent} / {total}{left}",
+      left: " · {t} left", speedDone: "Done · {rate}/s average",
+      link: "{mbps} Mbps · {n} threads",
+      throttled: "Bandwidth throttled to about {mbps} Mbps, still uploading",
+      sec: "s", min: "m ", hour: "h ",
+      upDone: "Upload complete", folderCreated: "Folder created",
+      stats: "{size} · {secs}s · {rate}/s average{dup}", dup: " · already stored, not duplicated",
+      rowLink: "Link", rowFile: "File", rowDirect: "Direct", rowFolder: "Folder",
+      copy: "Copy", open: "Open", preview: "Preview", close: "Close",
+      dropUpload: "Drop to upload", dropInto: "Drop into “{name}”", dropFolder: "Drop into this folder",
+      multi: "Uploading {i}/{n}: {name}", previewTitle: "Preview — ",
+    },
+  };
+  const S = T[LANG === "zh-TW" ? "zh" : "en"];
+  const fill = (tpl, kw) => tpl.replace(/\{(\w+)\}/g, (m, k) => (k in kw ? kw[k] : m));
+  const CONFIRM = {
+    dir: { zh: "確定刪除資料夾「{name}」（含 {n} 個檔案）嗎？無法復原。",
+           en: "Delete folder \u201c{name}\u201d and its {n} files? This cannot be undone." },
+    pubdir: { zh: "確定刪除公開資料夾「{name}」（含 {n} 個檔案）嗎？",
+              en: "Delete public folder \u201c{name}\u201d and its {n} files?" },
+    file: { zh: "確定要刪除「{name}」嗎？此動作無法復原。",
+            en: "Delete \u201c{name}\u201d? This cannot be undone." },
+    unshare: { zh: "確定取消這個分享連結嗎？", en: "Revoke this share link?" },
+  };
+  const key = LANG === "zh-TW" ? "zh" : "en";
+  const folderConfirm = (n, c) => fill(CONFIRM.dir[key], { name: n, n: c });
+  const pubFolderConfirm = (n, c) => fill(CONFIRM.pubdir[key], { name: n, n: c });
+  const fileConfirm = (n) => fill(CONFIRM.file[key], { name: n });
 
   function ready(fn) {
     if (document.readyState !== "loading") fn();
@@ -19,8 +94,8 @@
   async function copyText(text, okMsg) {
     try {
       await navigator.clipboard.writeText(text);
-      window.toast(okMsg || "連結已複製");
-    } catch { window.toast("複製失敗"); }
+      window.toast(okMsg || S.copied);
+    } catch { window.toast(S.copyFail); }
   }
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -43,17 +118,42 @@
 
   function fmtDur(s) {
     if (!(s > 0) || !isFinite(s)) return "";
-    if (s < 60) return Math.round(s) + " 秒";
+    if (s < 60) return Math.round(s) + S.sec;
     const m = Math.floor(s / 60);
-    return m < 60 ? `${m} 分 ${Math.round(s % 60)} 秒` : `${Math.floor(m / 60)} 小時 ${m % 60} 分`;
+    return m < 60 ? `${m}${S.min}${Math.round(s % 60)}${S.sec}` : `${Math.floor(m / 60)}${S.hour}${m % 60}${S.min}`;
   }
 
-  // 與伺服器 storage.threads_for_speed 同一組門檻
+  // XHR upload so we get real byte-level progress (fetch cannot report it).
+  // onByte(loaded) fires as the body actually leaves the browser, which is what
+  // the speed readout and the progress bar should follow.
+  function xhrPost(url, formData, onByte) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", url, true);
+      xhr.responseType = "text";
+      if (onByte) {
+        xhr.upload.onprogress = (ev) => onByte(ev.loaded);
+      }
+      xhr.onload = () => {
+        if (xhr.status < 200 || xhr.status >= 300) {
+          reject(new Error("HTTP " + xhr.status));
+          return;
+        }
+        let data = {};
+        try { data = JSON.parse(xhr.responseText || "{}"); } catch { /* 非 JSON 就忽略 */ }
+        resolve(data);
+      };
+      xhr.onerror = () => reject(new Error("network error"));
+      xhr.onabort = () => reject(new Error("aborted"));
+      xhr.send(formData);
+    });
+  }
+
+  // 與伺服器 storage.threads_for_speed 同一組門檻（十進位 MB/s，對應 80/40/16 Mbps）
   function threadsForSpeed(bps) {
-    const MB = 1048576;
-    if (bps > 10 * MB) return 16;
-    if (bps > 5 * MB) return 32;
-    if (bps > 2 * MB) return 64;
+    if (bps >= 10000000) return 16;
+    if (bps >= 5000000) return 32;
+    if (bps >= 2000000) return 64;
     return 128;
   }
 
@@ -77,7 +177,7 @@
   async function chunkedUpload(form) {
     const input = form.querySelector('input[type="file"]');
     const file = input && input.files[0];
-    if (!file) { window.toast("請先選擇檔案"); return; }
+    if (!file) { window.toast(S.needFile); return; }
     const mergeUrl = form.getAttribute("data-merge");
     const isPublic = form.hasAttribute("data-public");
     const btn = form.querySelector("[type=submit]");
@@ -93,25 +193,15 @@
 
     const total = Math.max(1, Math.ceil(file.size / CHUNK));
     const uploadId = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()));
-    // 慢連線加線程：先打 2MB 探針。用瀏覽器自己的碼表量（含 DNS/TCP/TLS 與整個來回），
-    // 伺服器只看見「請求進來之後」的時間，會把快線路量成慢線路。
-    let threads = Math.min(THREADS, total);
-    const probeUrl = form.getAttribute("data-probe");
-    if (probeUrl && total > 4) {
-      try {
-        const pfd = new FormData();
-        pfd.append("probe", new Blob([new Uint8Array(PROBE_BYTES)]), "probe.bin");
-        const t0 = performance.now();
-        const pr = await fetch(probeUrl, { method: "POST", body: pfd });
-        const bps = (PROBE_BYTES * 1000) / Math.max(performance.now() - t0, 1);
-        if (pr.ok) threads = Math.max(1, Math.min(128, threadsForSpeed(bps), total));
-      } catch { /* 探針失敗就用預設 */ }
-    }
     const startedAt = performance.now();
+    // 不用另外探針：先照 16 線程送，用前幾個 chunk 量到的真實速度決定要不要加線程。
     const state = {
       next: 0, done: 0, sentBytes: 0, failed: null,
-      paused: false, cancelled: false, threads,
+      paused: false, cancelled: false, maxThreads: Math.min(THREADS, total),
     };
+    // 用前幾個 chunk 量到的真實速度決定並行數。量測視窗從「第一個位元組真的
+    // 送出」開始算，所以不會把 16 條連線的 TLS 握手算成慢速。
+    const adapt = { first: 0, bytes: 0, chunks: 0, locked: total <= ADAPT_CHUNKS };
 
     if (btn) btn.loading = true;
     if (panel) { panel.hidden = false; panel.__state = state; }
@@ -119,13 +209,13 @@
     if (panel) panel.classList.remove("paused");
 
     // 線程表：最多顯示 16 列，人多時輪流顯示
-    const shown = Math.min(state.threads, 16);
+    const shown = Math.min(Math.max(ADAPT_CHUNKS * 2, 16), 16);
     const rowEls = [];
     if (rowsBox) {
       rowsBox.innerHTML = "";
       for (let t = 0; t < shown; t++) {
         const tr = document.createElement("tr");
-        tr.innerHTML = `<td>${t + 1}</td><td class="st idle">待命中</td>`;
+        tr.innerHTML = `<td>${t + 1}</td><td class="st idle">${S.idle}</td>`;
         rowsBox.appendChild(tr);
         rowEls.push(tr.querySelector(".st"));
       }
@@ -143,7 +233,9 @@
         cellEls.push(s);
       }
     }
-    if (segCount) segCount.textContent = `${total} 塊 / ${NCELL} 格` + (state.threads > 16 ? ` · ${state.threads} 線程` : "");
+    const segLabel = () => `${total} / ${NCELL}`
+      + (state.maxThreads > 16 ? `${S.threads}${state.maxThreads}${S.segUnit}` : "");
+    if (segCount) segCount.textContent = segLabel();
     const setRow = (t, txt, cls) => {
       const el = rowEls.length ? rowEls[t % rowEls.length] : null;
       if (!el) return;
@@ -151,8 +243,9 @@
       el.className = "st " + cls;
     };
     const render = () => {
-      if (pct) pct.textContent = Math.floor((state.done / total) * 100) + "%";
-      if (bar) bar.value = state.done / total;
+      const frac = file.size ? Math.min(1, state.sentBytes / file.size) : state.done / total;
+      if (pct) pct.textContent = Math.floor(frac * 100) + "%";
+      if (bar) bar.value = frac;
     };
     render();
 
@@ -161,21 +254,37 @@
     const speedTimer = setInterval(() => {
       const t = performance.now();
       const dt = Math.max((t - lastAt) / 1000, 0.05);
-      const inst = (state.sentBytes - lastSent) / dt;   // 目前這一瞬間的速率
+      const inst = Math.max(0, state.sentBytes - lastSent) / dt;   // 目前這一瞬間的速率
       lastAt = t;
       lastSent = state.sentBytes;
       ema = ema ? ema + (inst - ema) * 0.4 : inst;
+      // 前幾個 chunk 量到的真實速度 → 決定要加還是減並行數
+      const streaming = adapt.first ? t - adapt.first : 0;
+      const sampled = state.sentBytes - adapt.bytes;
+      if (!adapt.locked && !state.paused && adapt.first && state.done < total
+          && ((streaming >= ADAPT_MS && sampled >= ADAPT_BYTES)
+              || adapt.chunks >= ADAPT_CHUNKS || streaming >= ADAPT_MAX_MS)) {
+        const bps = sampled / Math.max(streaming / 1000, 0.05);
+        const want = Math.max(1, Math.min(128, threadsForSpeed(bps), total));
+        adapt.locked = true;
+        state.maxThreads = want;
+        if (want > started) addWorkers(want - started);
+        if (note) note.textContent = fill(S.link, { mbps: (bps * 8 / 1e6).toFixed(0), n: want });
+        if (segCount) segCount.textContent = segLabel();
+      }
       if (speed) {
         if (state.paused) {
-          speed.textContent = "已暫停";
+          speed.textContent = S.paused;
         } else if (state.done >= total) {
           const avg = state.sentBytes / Math.max((t - startedAt) / 1000, 0.001);
-          speed.textContent = `完成 · 平均 ${fmtMB(avg)}/s`;
+          speed.textContent = fill(S.speedDone, { rate: fmtMB(avg) });
         } else {
           const left = ema > 1 ? fmtDur((file.size - state.sentBytes) / ema) : "";
-          speed.textContent =
-            `${fmtMB(ema)}/s · ${fmtMB(state.sentBytes)} / ${fmtMB(file.size)}` +
-            (left ? ` · 剩 ${left}` : "");
+          speed.textContent = fill(S.speed, {
+            rate: fmtMB(ema), mbps: (ema * 8 / 1e6).toFixed(0),
+            sent: fmtMB(state.sentBytes), total: fmtMB(file.size),
+            left: left ? fill(S.left, { t: left }) : "",
+          });
         }
       }
       if (panel) {
@@ -190,9 +299,9 @@
         const st = panel && panel.__state;
         if (!st) return;
         st.paused = !st.paused;
-        pauseBtn.textContent = st.paused ? "繼續" : "暫停";
+        pauseBtn.textContent = st.paused ? S.resume : S.pause;
         if (panel) panel.classList.toggle("paused", st.paused);
-        window.toast(st.paused ? "已暫停" : "繼續上傳");
+        window.toast(st.paused ? S.paused : S.paused);
       });
     }
 
@@ -200,48 +309,72 @@
       while (true) {
         if (state.failed || state.cancelled) return;
         while (state.paused && !state.failed) await sleep(200);
-        if (state.next >= total) { setRow(t, "待命中", "idle"); return; }
+        if (t >= state.maxThreads) { setRow(t, S.idle, "idle"); return; }
+        if (state.next >= total) { setRow(t, S.idle, "idle"); return; }
         const i = state.next++;
-        setRow(t, `上傳中 #${i + 1}`, "live");
+        setRow(t, `${S.live}${i + 1}`, "live");
         const cell = cellOf(i);
         if (cellEls[cell]) cellEls[cell].classList.add("active");
         const part = file.slice(i * CHUNK, (i + 1) * CHUNK);
-        state.sentBytes += part.size;  // 送出就計，4MB 級距不會讓數字跳動或歸零
         const fd = new FormData();
         fd.append("file_chunk", part, "chunk");
         fd.append("upload_id", uploadId);
         fd.append("index", String(i));
         fd.append("filename", file.name);
+        // 進度事件回報「真的送出去多少位元組」，速度與百分比都跟著它走
+        let counted = 0;
         try {
-          const res = await fetch(form.action, { method: "POST", body: fd });
-          if (!res.ok) throw new Error("HTTP " + res.status);
-          try {
-            const js = await res.json();
-            if (js && js.throttled && note) {
-              note.textContent = `分享頻寬限速中（約 ${js.throttle_mbps || 90} Mbps），上傳繼續`;
-              if (panel) panel.classList.add("throttled");
+          const js = await xhrPost(form.action, fd, (loaded) => {
+            const v = Math.max(0, Math.min(loaded, part.size) - counted);
+            counted = Math.min(loaded, part.size);
+            if (!adapt.first) {          // 第一個位元組真正送出的時間
+              adapt.first = performance.now();
+              adapt.bytes = state.sentBytes;
             }
-          } catch { /* 非 JSON 回應就忽略 */ }
-        } catch (err) { state.failed = err; setRow(t, "失敗", "err"); return; }
+            state.sentBytes += v;
+            render();
+          });
+          if (js && js.throttled && note) {
+            note.textContent = fill(S.throttled, { mbps: js.throttle_mbps || 90 });
+            if (panel) panel.classList.add("throttled");
+          }
+        } catch (err) {
+          state.sentBytes -= counted;
+          state.failed = err;
+          setRow(t, S.failed, "err");
+          return;
+        }
         state.done++;
+        adapt.chunks++;
         cellGot[cell]++;
         if (cellGot[cell] >= cellNeed[cell] && cellEls[cell]) {
           cellEls[cell].classList.remove("active");
           cellEls[cell].classList.add("done");
         }
-        setRow(t, `完成 #${i + 1}`, "ok");
+        setRow(t, `${S.chunkDone}${i + 1}`, "ok");
         render();
       }
     }
 
-    await Promise.all(Array.from({ length: state.threads }, (_, t) => worker(t)));
+    // 線程池：先 16 條起步，量到慢連線就再往上加（多開的沒任務就自己結束）
+    let started = 0, running = 0, settle;
+    const allDone = new Promise((res) => { settle = res; });
+    function addWorkers(n) {
+      for (let k = 0; k < n; k++) {
+        const t = started++;
+        running++;
+        worker(t).then(() => { if (--running === 0) settle(); });
+      }
+    }
+    addWorkers(Math.min(THREADS, total));
+    await allDone;
     clearInterval(speedTimer);
     if (state.failed) {
-      window.toast("上傳失敗：" + state.failed.message);
+      window.toast(S.fail + state.failed.message);
       if (btn) btn.loading = false;
       return;
     }
-    if (pct) pct.textContent = "合併中…";
+    if (pct) pct.textContent = S.merging;
     const elapsed = Math.max((performance.now() - startedAt) / 1000, 0.001);
     try {
       const body = { upload_id: uploadId, filename: file.name, total_chunks: total };
@@ -272,30 +405,32 @@
         const secs = elapsed < 10 ? elapsed.toFixed(1) : Math.round(elapsed);
         const rows = [];
         if (share && share !== durl) {
-          rows.push(linkRow("連結", share,
-            `<mdui-button variant="text" data-copy="${esc(share)}">複製</mdui-button>` +
-            `<a href="${esc(share)}"><mdui-button variant="text">開啟</mdui-button></a>`));
+          rows.push(linkRow(S.rowLink, share,
+            `<mdui-button variant="text" data-copy="${esc(share)}">${esc(S.copy)}</mdui-button>` +
+            `<a href="${esc(share)}"><mdui-button variant="text">${esc(S.open)}</mdui-button></a>`));
         }
-        rows.push(linkRow(share === durl ? "檔案" : "直連", durl,
-          `<mdui-button variant="text" data-preview="${esc(durl)}?preview=1" data-name="${esc(data.filename)}">預覽</mdui-button>` +
-          `<mdui-button variant="text" data-copy="${esc(durl)}">複製</mdui-button>`));
+        rows.push(linkRow(share === durl ? S.rowFile : S.rowDirect, durl,
+          `<mdui-button variant="text" data-preview="${esc(durl)}?preview=1" data-name="${esc(data.filename)}">${esc(S.preview)}</mdui-button>` +
+          `<mdui-button variant="text" data-copy="${esc(durl)}">${esc(S.copy)}</mdui-button>`));
         if (furl) {
-          rows.push(linkRow("資料夾", furl,
-            `<a href="${esc(furl)}"><mdui-button variant="text">開啟</mdui-button></a>` +
-            `<mdui-button variant="text" data-copy="${esc(furl)}">複製</mdui-button>`));
+          rows.push(linkRow(S.rowFolder, furl,
+            `<a href="${esc(furl)}"><mdui-button variant="text">${esc(S.open)}</mdui-button></a>` +
+            `<mdui-button variant="text" data-copy="${esc(furl)}">${esc(S.copy)}</mdui-button>`));
         }
-        const stats = `${fmtMB(data.size_bytes)} · ${secs} 秒 · 平均 ${fmtMB(data.size_bytes / elapsed)}/s`
-          + (data.deduplicated ? " · 內容已存在，未重複儲存" : "");
-        const html = resultCard("上傳完成", data.filename, stats, rows);
+        const stats = fill(S.stats, {
+          size: fmtMB(data.size_bytes), secs, rate: fmtMB(data.size_bytes / elapsed),
+          dup: data.deduplicated ? S.dup : "",
+        });
+        const html = resultCard(S.upDone, data.filename, stats, rows);
         if (out) out.innerHTML = html;
         if (panel) panel.hidden = true;
-        window.toast("上傳完成");
+        window.toast(S.done);
       } else {
-        window.toast("上傳完成");
+        window.toast(S.done);
         window.location.reload();
       }
     } catch (err) {
-      window.toast("合併失敗：" + err.message);
+      window.toast(S.mergeFail + err.message);
       if (btn) btn.loading = false;
     }
   }
@@ -317,7 +452,7 @@
       if (!size) { window.location.href = url; return; } // 後備：直接下載
       const n = Math.min(THREADS, Math.max(1, Math.ceil(size / (256 * 1024))));
       const part = Math.ceil(size / n);
-      window.toast(`下載中… ${name}`);
+      window.toast(`${name}`);
       const bufs = new Array(n);
       let cursor = 0;
       async function worker() {
@@ -338,9 +473,9 @@
       document.body.appendChild(a);
       a.click();
       setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
-      window.toast("下載完成");
+      window.toast(S.dlDone);
     } catch (err) {
-      window.toast("下載失敗，改用直接下載");
+      window.toast(S.dlFail);
       window.location.href = url;
     } finally { btn.loading = false; }
   }
@@ -348,9 +483,9 @@
   // ---- 預覽：對話框內嵌 iframe ----
   function preview(url, name) {
     const dlg = document.createElement("mdui-dialog");
-    dlg.setAttribute("headline", "預覽 — " + name);
+    dlg.setAttribute("headline", S.previewTitle + name);
     dlg.innerHTML = `<iframe src="${url}" style="width:100%;height:60vh;border:0;border-radius:8px" title="preview"></iframe>
-      <mdui-button slot="action" variant="text">關閉</mdui-button>`;
+      <mdui-button slot="action" variant="text">${esc(S.close)}</mdui-button>`;
     document.body.appendChild(dlg);
     dlg.querySelector("mdui-button").addEventListener("click", () => { dlg.open = false; setTimeout(() => dlg.remove(), 300); });
     dlg.open = true;
@@ -389,17 +524,17 @@
 
   async function uploadDropped(files, scope, folderId, label) {
     const form = formForScope(scope);
-    if (!form) { window.toast("先切到可以上傳的分頁"); return; }
+    if (!form) { window.toast(S.switchTab); return; }
     const input = form.querySelector('input[type="file"]');
     setTargetFolder(form, scope, folderId);
     const list = Array.from(files);
     for (let i = 0; i < list.length; i++) {
-      if (list.length > 1) window.toast(`上傳 ${i + 1}/${list.length}：${list[i].name}`);
+      if (list.length > 1) window.toast(fill(S.multi, { i: i + 1, n: list.length, name: list[i].name }));
       pickFile(input, list[i]);
       await chunkedUpload(form);
     }
     if (list.length > 1) window.location.reload();
-    else if (label) window.toast(`已上傳到 ${label}`);
+    else if (label) window.toast(S.uploadedTo + label);
   }
 
   async function moveDropped(fileId, scope, folderId, label, fromFolder) {
@@ -415,9 +550,9 @@
         }),
       });
       if (!res.ok) throw new Error("HTTP " + res.status);
-      window.toast(label ? `已移到 ${label}` : "已移出資料夾");
+      window.toast(label ? S.moved + label : S.movedOut);
       window.location.reload();
-    } catch { window.toast("移動失敗"); }
+    } catch { window.toast(S.moveFail); }
   }
 
   const MOVE_MIME = "application/x-caveman-move";
@@ -426,19 +561,6 @@
     const root = document.querySelector("[data-droproot]");
     if (!root) return;
     const hint = root.querySelector("[data-drophint]");
-
-    // TOS strip: dismiss once
-    const tos = root.querySelector("[data-tos]");
-    if (tos) {
-      if (localStorage.getItem("tos_hidden") === "1") tos.remove();
-      else {
-        const close = tos.querySelector("[data-tos-close]");
-        if (close) close.addEventListener("click", () => {
-          tos.remove();
-          localStorage.setItem("tos_hidden", "1");
-        });
-      }
-    }
 
     const highlight = (el, on) => {
       if (!el) return;
@@ -476,7 +598,7 @@
       ev.dataTransfer.dropEffect = target && scopeOf(target) === "private" ? "copy" : "copy";
       root.querySelectorAll(".dragover").forEach((el) => el.classList.remove("dragover"));
       highlight(target, true);
-      if (hint) hint.textContent = target ? dropLabel(target) : "放開手上傳";
+      if (hint) hint.textContent = target ? dropLabel(target) : S.dropUpload;
     });
 
     root.addEventListener("dragleave", (ev) => {
@@ -496,7 +618,7 @@
         const folderId = target.getAttribute("data-dropfolder") || "";
         const label = target.getAttribute("data-droplabel") || "";
         if (move && ev.dataTransfer.files.length === 0) {
-          if ((move.scope || scope) !== scope) { window.toast("不能跨公開／私人移動"); return; }
+          if ((move.scope || scope) !== scope) { window.toast(S.noCross); return; }
           return moveDropped(move.id, scope, folderId, label, move.from);
         }
         return uploadDropped(ev.dataTransfer.files, scope, folderId, label);
@@ -525,7 +647,7 @@
     function dropLabel(el) {
       const label = el.getAttribute("data-droplabel");
       const folder = el.getAttribute("data-dropfolder");
-      return label ? `放到「${label}」` : folder ? "放到這個資料夾" : "放開手上傳";
+      return label ? fill(S.dropInto, { name: label }) : folder ? S.dropFolder : S.dropUpload;
     }
   }
 
@@ -542,10 +664,10 @@
       const cur = root.classList.contains("mdui-theme-dark") ? "dark"
         : root.classList.contains("mdui-theme-light") ? "light" : "auto";
       const next = cur === "dark" ? "light" : cur === "light" ? "auto" : "dark";
-      const zh = { dark: "深色", light: "淺色", auto: "自動" };
+      const names = { dark: S.dark, light: S.light, auto: S.auto };
       root.classList.remove("mdui-theme-auto", "mdui-theme-light", "mdui-theme-dark");
       root.classList.add("mdui-theme-" + next);
-      window.toast("主題：" + zh[next]);
+      window.toast(S.theme + names[next]);
     });
 
     // 全域委派：複製 / 預覽（含動態加入的結果列）
@@ -576,9 +698,9 @@
         ev.preventDefault();
         const input = form.querySelector('input[type="file"]');
         const files = Array.from((input && input.files) || []);
-        if (!files.length) { window.toast("請先選擇檔案"); return; }
+        if (!files.length) { window.toast(S.needFile); return; }
         for (let i = 0; i < files.length; i++) {
-          if (files.length > 1) window.toast(`上傳 ${i + 1}/${files.length}：${files[i].name}`);
+          if (files.length > 1) window.toast(fill(S.multi, { i: i + 1, n: files.length, name: files[i].name }));
           pickFile(input, files[i]);
           await chunkedUpload(form);
         }
@@ -598,7 +720,7 @@
       form.addEventListener("submit", async (ev) => {
         ev.preventDefault();
         const name = fieldValue(form, "name");
-        if (!name) { window.toast("請輸入資料夾名稱"); return; }
+        if (!name) { window.toast(S.needName); return; }
         try {
           const res = await fetch("/api/folders", {
             method: "POST",
@@ -606,9 +728,9 @@
             body: JSON.stringify({ name }),
           });
           if (!res.ok) throw new Error("HTTP " + res.status);
-          window.toast("資料夾已建立");
+          window.toast(S.mkdirOk);
           window.location.reload();
-        } catch { window.toast("建立失敗"); }
+        } catch { window.toast(S.mkdirFail); }
       });
     });
 
@@ -622,14 +744,14 @@
             body: JSON.stringify({ mode: btn.getAttribute("data-mode") || "view" }),
           });
           if (!res.ok) throw new Error("HTTP " + res.status);
-          window.toast("分享連結已建立");
+          window.toast(S.shareOk);
           window.location.reload();
-        } catch { window.toast("建立失敗"); }
+        } catch { window.toast(S.mkdirFail); }
       });
     });
     document.querySelectorAll("[data-unshare]").forEach((btn) => {
       btn.addEventListener("click", async () => {
-        if (!window.confirm("確定取消這個分享連結嗎？")) return;
+        if (!window.confirm(CONFIRM.unshare[key])) return;
         try {
           const res = await fetch("/api/share/revoke", {
             method: "POST",
@@ -637,9 +759,9 @@
             body: JSON.stringify({ token: btn.getAttribute("data-unshare") }),
           });
           if (!res.ok) throw new Error("HTTP " + res.status);
-          window.toast("已取消分享");
+          window.toast(S.unshareOk);
           window.location.reload();
-        } catch { window.toast("取消失敗"); }
+        } catch { window.toast(S.unshareFail); }
       });
     });
 
@@ -648,7 +770,7 @@
       btn.addEventListener("click", () => {
         const name = btn.getAttribute("data-name") || "";
         const count = btn.getAttribute("data-count") || "0";
-        if (window.confirm(`確定刪除資料夾「${name}」（含 ${count} 個檔案）嗎？無法復原。`)) {
+        if (window.confirm(folderConfirm(name, count))) {
           window.location.href = btn.getAttribute("data-delete-dir");
         }
       });
@@ -659,7 +781,7 @@
       btn.addEventListener("click", () => {
         const name = btn.getAttribute("data-name") || "";
         const count = btn.getAttribute("data-count") || "0";
-        if (window.confirm(`確定刪除公開資料夾「${name}」（含 ${count} 個檔案）嗎？`)) {
+        if (window.confirm(pubFolderConfirm(name, count))) {
           window.location.href = btn.getAttribute("data-delpubdir");
         }
       });
@@ -669,14 +791,14 @@
     document.querySelectorAll("[data-delete]").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const name = btn.getAttribute("data-name") || "";
-        if (!window.confirm(`確定要刪除「${name}」嗎？此動作無法復原。`)) return;
+        if (!window.confirm(fileConfirm(name))) return;
         if (btn.hasAttribute("data-delete-post")) {
           try {
             const res = await fetch(btn.getAttribute("data-delete"), { method: "POST" });
             if (!res.ok) throw new Error("HTTP " + res.status);
-            window.toast("已刪除");
+            window.toast(S.deleted);
             window.location.reload();
-          } catch { window.toast("刪除失敗"); }
+          } catch { window.toast(S.deleteFail); }
           return;
         }
         window.location.href = btn.getAttribute("data-delete");
@@ -746,16 +868,16 @@
           const data = await res.json();
           const out = host ? host.querySelector("[data-upload-result]") : null;
           if (out) {
-            out.innerHTML = resultCard("資料夾已建立", "", data.folder_name || "未命名資料夾", [
-              linkRow("連結", data.folder_url,
-                `<a href="${esc(data.folder_url)}"><mdui-button variant="text">開啟</mdui-button></a>` +
-                `<mdui-button variant="text" data-copy="${esc(data.folder_url)}">複製</mdui-button>`),
+            out.innerHTML = resultCard(S.folderCreated, "", data.folder_name || S.idle, [
+              linkRow(S.rowLink, data.folder_url,
+                `<a href="${esc(data.folder_url)}"><mdui-button variant="text">${esc(S.open)}</mdui-button></a>` +
+                `<mdui-button variant="text" data-copy="${esc(data.folder_url)}">${esc(S.copy)}</mdui-button>`),
             ]);
-            window.toast("資料夾已建立");
+            window.toast(S.folderMade);
           } else {
             window.location.href = data.folder_url;
           }
-        } catch { window.toast("無法建立資料夾"); }
+        } catch { window.toast(S.folderFail); }
         finally { btn.loading = false; }
       });
     });

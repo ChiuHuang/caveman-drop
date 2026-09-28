@@ -55,6 +55,7 @@ from ..storage import (
     validate_public_id,
     validate_upload_id,
 )
+from ..i18n import lang_for, t
 from ..ui import file_rows, fmt_size, page
 from ..urls import base_url
 
@@ -397,6 +398,7 @@ async def public_single_api(request: Request, file_id: str):
     }
     if not wants_html(request):
         return payload
+    lang = lang_for(request)
     return HTMLResponse(
         page(
             payload["filename"],
@@ -405,12 +407,13 @@ async def public_single_api(request: Request, file_id: str):
           <h1>{html.escape(payload["filename"])}</h1>
           <p>{fmt_size(payload["size_bytes"])} · {html.escape(payload["content_type"])}</p>
           <div class="form-row">
-            <a href="{payload["download_url"]}"><mdui-button icon="download">下載</mdui-button></a>
-            <mdui-button variant="outlined" data-preview="{payload["download_url"]}?preview=1" data-name="{html.escape(payload["filename"])}">預覽</mdui-button>
-            <mdui-button variant="outlined" data-copy="{payload["download_url"]}">複製連結</mdui-button>
+            <a href="{payload["download_url"]}"><mdui-button icon="download">{html.escape(t(lang, "btn_download"))}</mdui-button></a>
+            <mdui-button variant="outlined" data-preview="{payload["download_url"]}?preview=1" data-name="{html.escape(payload["filename"])}">{html.escape(t(lang, "btn_preview"))}</mdui-button>
+            <mdui-button variant="outlined" data-copy="{payload["download_url"]}">{html.escape(t(lang, "btn_copy_link"))}</mdui-button>
           </div>
         </mdui-card>""",
             active="upload",
+            lang=lang,
         )
     )
 
@@ -461,18 +464,19 @@ async def public_file_api(request: Request, folder_id: str, file_id: str):
     }
     if not wants_html(request):
         return payload
+    lang = lang_for(request)
     return HTMLResponse(
         page(
             payload["filename"],
             f"""
         <mdui-card variant="filled" class="card-pad hero">
           <h1>{html.escape(payload["filename"])}</h1>
-          <p>{payload["size_bytes"]} 位元組 · {html.escape(payload["content_type"])}</p>
+          <p>{fmt_size(payload["size_bytes"])} · {html.escape(payload["content_type"])}</p>
           <div class="form-row">
-            <a href="{payload["download_url"]}"><mdui-button icon="download">下載</mdui-button></a>
-            <mdui-button variant="outlined" data-preview="{payload["download_url"]}?preview=1" data-name="{html.escape(payload["filename"])}">預覽</mdui-button>
-            <mdui-button variant="outlined" data-copy="{payload["download_url"]}">複製連結</mdui-button>
-            <a href="{base}/f/{folder_id}"><mdui-button variant="text">開啟資料夾</mdui-button></a>
+            <a href="{payload["download_url"]}"><mdui-button icon="download">{html.escape(t(lang, "btn_download"))}</mdui-button></a>
+            <mdui-button variant="outlined" data-preview="{payload["download_url"]}?preview=1" data-name="{html.escape(payload["filename"])}">{html.escape(t(lang, "btn_preview"))}</mdui-button>
+            <mdui-button variant="outlined" data-copy="{payload["download_url"]}">{html.escape(t(lang, "btn_copy_link"))}</mdui-button>
+            <a href="{base}/f/{folder_id}"><mdui-button variant="text">{html.escape(t(lang, "open_folder"))}</mdui-button></a>
           </div>
         </mdui-card>
         <mdui-card variant="outlined" class="card-pad">
@@ -480,6 +484,7 @@ async def public_file_api(request: Request, folder_id: str, file_id: str):
           <pre class="curl">GET {base}/api/public/file/{folder_id}/{file_id}</pre>
         </mdui-card>""",
             active="upload",
+            lang=lang,
         )
     )
 
@@ -506,23 +511,25 @@ async def public_folder_api(request: Request, folder_id: str):
             "upload_url": f"{base}/f/{folder_id}",
             "files": files,
         }
+    lang = lang_for(request)
     return HTMLResponse(
         page(
-            f"資料夾 {folder_id[:8]}（API）",
+            f"Folder {folder_id[:8]} (API)",
             f"""
         <mdui-card variant="filled" class="card-pad hero">
-          <h1>資料夾 API 控制台</h1>
+          <h1>{html.escape(t(lang, "api_console_h"))}</h1>
           <p><code>{html.escape(folder_id)}</code></p>
           <div class="form-row">
-            <a href="{base}/f/{folder_id}"><mdui-button>開啟資料夾介面</mdui-button></a>
-            <mdui-button variant="outlined" data-copy="{base}/api/public/folder/{html.escape(folder_id)}">複製 API 網址</mdui-button>
+            <a href="{base}/f/{folder_id}"><mdui-button>{html.escape(t(lang, "api_console_open"))}</mdui-button></a>
+            <mdui-button variant="outlined" data-copy="{base}/api/public/folder/{html.escape(folder_id)}">{html.escape(t(lang, "copy_api_url"))}</mdui-button>
           </div>
         </mdui-card>
         <mdui-card variant="outlined" class="card-pad">
-          <h2>檔案（{len(files)}）</h2>
-          {file_rows(files, folder_id, base)}
+          <h2>{html.escape(t(lang, "files_h", n=len(files)))}</h2>
+          {file_rows(lang, files, folder_id, base)}
         </mdui-card>""",
             active="api",
+            lang=lang,
         )
     )
 
