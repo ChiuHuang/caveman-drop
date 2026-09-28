@@ -31,6 +31,7 @@ from ..storage import (
     delete_private_folder,
     delete_public_folder,
     entry_meta,
+    find_public_entry_dir,
     forget_short_code,
     get_private_folders,
     get_share,
@@ -43,6 +44,9 @@ from ..storage import (
     public_files,
     public_folder_files,
     public_folder_list,
+    rename_file_entry,
+    rename_private_folder,
+    rename_public_folder,
     revoke_share,
     save_entry,
     speed_probe,
@@ -53,7 +57,7 @@ from ..storage import (
     validate_upload_id,
 )
 from ..i18n import lang_for, t
-from ..ui import page, private_panel, share_file_rows, thread_panel
+from ..ui import drive_panel, page, share_file_rows, thread_panel
 from ..auth import authed, query_auth_ok
 from ..urls import base_url
 
@@ -70,6 +74,17 @@ class MergePayload(BaseModel):
 
 class MkdirPayload(BaseModel):
     name: str = ""
+
+
+class RenamePayload(BaseModel):
+    folder_id: str
+    name: str = ""
+
+
+class FileRenamePayload(BaseModel):
+    file_id: str
+    name: str = ""
+    folder_id: Optional[str] = None
 
 
 class SharePayload(BaseModel):
@@ -162,8 +177,45 @@ async def private_probe(request: Request, probe: UploadFile = File(...), ms: Opt
 async def create_folder(request: Request, payload: MkdirPayload):
     if not authed(request):
         raise HTTPException(401)
-    fid, meta = create_private_folder(payload.name)
+    fid, meta = create_private_folder(payload.name, t(lang_for(request), "unnamed_folder"))
     return {"success": True, "folder_id": fid, "name": meta["name"]}
+
+
+@router.post("/api/folders/rename")
+async def rename_folder(request: Request, payload: RenamePayload):
+    """Change a private folder's name. The id, the files and the share links stay."""
+    _need_admin(request)
+    name = rename_private_folder(
+        payload.folder_id, payload.name, t(lang_for(request), "unnamed_folder")
+    )
+    return {"success": True, "folder_id": payload.folder_id, "name": name}
+
+
+@router.post("/api/public/folder/rename")
+async def rename_pub_folder(request: Request, payload: RenamePayload):
+    """Change a public folder's name. Its URL does not change."""
+    _need_admin(request)
+    name = rename_public_folder(
+        payload.folder_id, payload.name, t(lang_for(request), "unnamed_folder")
+    )
+    return {"success": True, "folder_id": payload.folder_id, "name": name}
+
+
+@router.post("/api/files/rename")
+async def rename_private_file(request: Request, payload: FileRenamePayload):
+    """Change a private file's display name. id, bytes and links stay."""
+    _need_admin(request)
+    name = rename_file_entry(settings.upload_dir, payload.file_id, payload.name)
+    return {"success": True, "file_id": payload.file_id, "name": name}
+
+
+@router.post("/api/public/file/rename")
+async def rename_pub_file(request: Request, payload: FileRenamePayload):
+    """Change a public file's display name. id, bytes and links stay."""
+    _need_admin(request)
+    d = find_public_entry_dir(payload.file_id, payload.folder_id or "")
+    name = rename_file_entry(d, payload.file_id, payload.name)
+    return {"success": True, "file_id": payload.file_id, "name": name}
 
 
 @router.get("/api/folders")
@@ -201,8 +253,9 @@ async def list_folders(request: Request):
     }
 
 
-@router.get("/deldir/{folder_id}")
+@router.api_route("/deldir/{folder_id}", methods=["GET", "POST"])
 async def delete_folder(request: Request, folder_id: str):
+    """Delete a private folder. POST lets the drive stay on the folder it is showing."""
     if not authed(request):
         if wants_html(request):
             return RedirectResponse(url="/login", status_code=303)
@@ -436,7 +489,7 @@ async def api_files(request: Request):
           <h1>{html.escape(t(lang, "private_cloud_h"))}</h1>
           <p><a href="/">{html.escape(t(lang, "back_home"))}</a></p>
         </mdui-card>
-        <div class="stack">{private_panel(
+        <div class="stack">{drive_panel(
             lang, files, base, get_private_folders(), get_shares(),
         )}</div>""",
             active="home",
@@ -464,7 +517,7 @@ async def list_all_public(request: Request):
     _need_admin(request)
     return {
         "files": public_files(),
-        "folders": public_folder_list(),
+        "folders": public_folder_list(t(lang_for(request), "unnamed_folder")),
     }
 
 
@@ -557,7 +610,7 @@ async def view_file(file_id: str):
     return FileResponse(path, filename=meta["filename"])
 
 
-@router.get("/del/{file_id}")
+@router.api_route("/del/{file_id}", methods=["GET", "POST"])
 async def delete_file(request: Request, file_id: str):
     if not authed(request):
         if wants_html(request):

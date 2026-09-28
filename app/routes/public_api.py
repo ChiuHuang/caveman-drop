@@ -153,7 +153,11 @@ async def public_upload(
 
     if folder:
         return await _upload_to_folder(
-            request, ip, file, resolve_public_folder(folder), description
+            request,
+            ip,
+            file,
+            resolve_public_folder(folder, t(lang_for(request), "unnamed_folder")),
+            description,
         )
 
     original_name = os.path.basename(file.filename or "unnamed") or "unnamed"
@@ -238,7 +242,7 @@ async def public_create_folder(request: Request):
             name = clean_name(str(body.get("name", "") or ""))
     except Exception:
         pass
-    folder_id, meta = create_public_folder(name)
+    folder_id, meta = create_public_folder(name, t(lang_for(request), "unnamed_folder"))
     base = base_url(request)
     return {
         "success": True,
@@ -303,7 +307,7 @@ async def public_merge_chunks(request: Request, payload: PublicMergePayload):
     }
 
     if payload.folder:
-        folder_id = resolve_public_folder(payload.folder)
+        folder_id = resolve_public_folder(payload.folder, t(lang_for(request), "unnamed_folder"))
         validate_public_id(folder_id, "folder id")
         fdir = public_folder_dir(folder_id)
         if not os.path.isdir(fdir):

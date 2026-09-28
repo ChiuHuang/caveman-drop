@@ -10,7 +10,8 @@
   可覆寫（見 `app/i18n.py`）。
 - **腳本與 AI**（`curl`、Python、AI 工具）透過內容協商拿到純 JSON / 純文字。加上 `?format=json` 或 `?format=html` 可強制指定。
 - 機器可讀文件在 `/llms.txt`；完整 API 索引在 `/api`。
-- 登入後進入**私人模式**：只有私人空間，不再顯示公開上傳。
+- 登入後是**私人雲端**（Google Drive 那種）：資料夾方塊、麵包屑、拖曳移動／上傳、
+  右上角新增資料夾與上傳圖示、每個方塊可改名／分享／刪除。公開的東西在第二個分頁。
 
 ## 快速開始
 
@@ -88,6 +89,10 @@ Cloudflare 後面也能正確限速。登入 session 不限速。
 公開上傳的 `folder` 欄位吃兩種東西：既有資料夾 id，或任意文字（自動開一個
 以它為名字的新資料夾並上傳進去）。要「只建資料夾、不傳檔」就
 `POST /api/public/folder {"name": "..."}`，或網頁的「建立資料夾」分頁。
+
+管理員可以改任何資料夾的名字，id、分享網址、裡面檔案的連結都不變：
+`POST /api/folders/rename`（私人）與 `POST /api/public/folder/rename`（公開），
+body 都是 `{"folder_id": "...", "name": "..."}`。
 
 私人區除了登入 cookie，也接受 **`?auth=<PASSWORD>`**（每個請求都帶）。這是為
 了走 CORS 型代理的客戶端：代理會轉送請求，但 `Set-Cookie` 回不到瀏覽器，

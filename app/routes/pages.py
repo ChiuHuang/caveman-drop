@@ -25,7 +25,7 @@ from ..storage import (
     short_code,
 )
 from ..i18n import lang_for, t
-from ..ui import file_rows, page, private_panel, public_upload_form
+from ..ui import drive_panel, file_rows, page, public_upload_form
 from ..auth import authed
 from ..urls import base_url
 
@@ -36,26 +36,23 @@ def _dashboard_html(request: Request, is_signed_in: bool) -> str:
     base = base_url(request)
     lang = lang_for(request)
     if is_signed_in:
+        folders = get_private_folders()
+        current = (request.query_params.get("folder") or "").strip()
+        if current not in folders:
+            current = ""
         return page(
-            t(lang, "private_h1"),
+            t(lang, "drive_title"),
             f"""
-        <mdui-card variant="filled" class="card-pad hero">
-          <h1>{html.escape(t(lang, "private_h1"))}</h1>
-          <p>{html.escape(t(lang, "private_logged_in"))}</p>
-          <div class="form-row">
-            <a href="/api/files"><mdui-button variant="outlined">{html.escape(t(lang, "files_api"))}</mdui-button></a>
-            <a href="/logout"><mdui-button variant="text">{html.escape(t(lang, "nav_logout"))}</mdui-button></a>
-          </div>
-        </mdui-card>
         <div class="stack">
-          {private_panel(
-            lang, private_files(), base, get_private_folders(), get_shares(),
-            public_files(), public_folder_list(),
+          {drive_panel(
+            lang, private_files(), base, folders, get_shares(), current,
+            public_files(), public_folder_list(t(lang, "unnamed_folder")),
           )}
         </div>""",
             active="home",
             authed=True,
             lang=lang,
+            extra_qs=f"folder={current}&" if current else "",
         )
     return page(
         t(lang, "nav_home"),

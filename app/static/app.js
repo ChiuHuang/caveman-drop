@@ -36,6 +36,8 @@
       copy: "複製", open: "開啟", preview: "預覽", close: "關閉",
       dropUpload: "放開手上傳", dropInto: "放到「{name}」", dropFolder: "放到這個資料夾",
       multi: "上傳 {i}/{n}：{name}", previewTitle: "預覽 — ",
+      rename: "改名", renameOk: "已改名", renameFail: "改名失敗", newFolder: "新增資料夾",
+      save: "儲存", cancel: "取消", nameLabel: "名稱", driveTitle: "我的雲端",
     },
     en: {
       copied: "Link copied", copyFail: "Copy failed", needFile: "Pick a file first",
@@ -61,6 +63,8 @@
       copy: "Copy", open: "Open", preview: "Preview", close: "Close",
       dropUpload: "Drop to upload", dropInto: "Drop into “{name}”", dropFolder: "Drop into this folder",
       multi: "Uploading {i}/{n}: {name}", previewTitle: "Preview — ",
+      rename: "Rename", renameOk: "Renamed", renameFail: "Rename failed", newFolder: "New folder",
+      save: "Save", cancel: "Cancel", nameLabel: "Name", driveTitle: "My drive",
     },
   };
   const S = T[LANG === "zh-TW" ? "zh" : "en"];
@@ -491,6 +495,46 @@
     dlg.open = true;
   }
 
+  // ---- 改名／新增資料夾：同一個輸入對話框 ----
+  function askName(headline, value) {
+    return new Promise((resolve) => {
+      const dlg = document.createElement("mdui-dialog");
+      dlg.setAttribute("headline", headline);
+      dlg.innerHTML = `<mdui-text-field label="${esc(S.nameLabel)}" value="${esc(value || "")}"
+          variant="filled" data-namefield></mdui-text-field>
+        <mdui-button slot="action" variant="text" data-no>${esc(S.cancel)}</mdui-button>
+        <mdui-button slot="action" variant="filled" data-yes>${esc(S.save)}</mdui-button>`;
+      document.body.appendChild(dlg);
+      const field = dlg.querySelector("[data-namefield]");
+      let settled = false;
+      const done = (val) => {
+        if (settled) return;
+        settled = true;
+        dlg.open = false;
+        setTimeout(() => dlg.remove(), 300);
+        resolve(val);
+      };
+      dlg.querySelector("[data-no]").addEventListener("click", () => done(null));
+      dlg.querySelector("[data-yes]").addEventListener("click", () => done(String(field.value || "").trim() || null));
+      field.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") { ev.preventDefault(); done(String(field.value || "").trim() || null); }
+      });
+      dlg.addEventListener("closed", () => done(null));   // Esc / overlay = cancel
+      dlg.open = true;
+      setTimeout(() => { try { field.focus(); } catch { /* focus 是選的 */ } }, 60);
+    });
+  }
+
+  async function postJSON(url, body) {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    return res.json().catch(() => ({}));
+  }
+
   // ---- 拖放：拖檔案進資料夾、拖檔案列換資料夾、整頁拖放上傳 ----
   function pickFile(input, file) {
     const dt = new DataTransfer();
@@ -504,18 +548,21 @@
     return forms.find((f) => (scope === "public") === f.hasAttribute("data-public")) || null;
   }
 
-  function visibleScope() {
+  // The private drive's uploader already carries the folder being viewed, so a
+  // drop on empty page space keeps that folder. `null` means "leave it as is".
+  function dropContext() {
     const panel = Array.from(document.querySelectorAll("[data-tabpanel]")).find((p) => !p.hidden);
-    return panel && panel.querySelector('form[data-chunked][data-public]') ? "public" : "private";
+    const form = panel && panel.querySelector("form[data-chunked]");
+    if (!form) return { scope: "private", form: null, folderId: null };
+    if (form.hasAttribute("data-public")) return { scope: "public", form, folderId: "" };
+    return { scope: "private", form, folderId: null };
   }
 
   function setTargetFolder(form, scope, folderId) {
+    if (folderId === null) return;               // keep whatever the form says
     if (scope === "public") {
       const field = form.querySelector('[name="folder"]');
-      if (field) {
-        if (field.tagName.toLowerCase() === "input") field.value = folderId;
-        else field.value = folderId;
-      }
+      if (field) field.value = folderId;
       return;
     }
     const sel = form.querySelector('[name="folder_id"]');
@@ -623,8 +670,10 @@
         }
         return uploadDropped(ev.dataTransfer.files, scope, folderId, label);
       }
-      // dropped on empty page space: whichever upload form is on screen
-      return uploadDropped(ev.dataTransfer.files, visibleScope(), "", "");
+      // dropped on empty page space: the uploader that is on screen, into the
+      // folder the drive is currently showing
+      const ctx = dropContext();
+      return uploadDropped(ev.dataTransfer.files, ctx.scope, ctx.folderId, "");
     });
 
     function hasFiles(ev) {
@@ -734,6 +783,69 @@
       });
     });
 
+    // 雲端工具列：新增資料夾（資料夾圖示）＋上傳（雲朵圖示）
+    document.querySelectorAll("[data-new-folder]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const name = await askName(S.newFolder, "");
+        if (!name) return;
+        try {
+          await postJSON("/api/folders", { name });
+          window.toast(S.mkdirOk);
+          window.location.reload();
+        } catch { window.toast(S.mkdirFail); }
+      });
+    });
+    document.querySelectorAll("[data-drive-upload]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const panel = btn.closest("[data-tabpanel]") || document;
+        const input = panel.querySelector('form[data-chunked]:not([data-public]) input[type="file"]')
+          || document.querySelector('form[data-chunked]:not([data-public]) input[type="file"]');
+        if (input) input.click();
+      });
+    });
+    // 工具列的檔案選擇器是隱藏的：挑完檔直接送出表單
+    document.querySelectorAll("form.drive-upload input[type=file]").forEach((input) => {
+      input.addEventListener("change", () => {
+        if (input.files && input.files.length && input.form) input.form.requestSubmit();
+      });
+    });
+
+    // 改名：資料夾圖示上的筆。data-public=1 走公開資料夾端點。
+    document.querySelectorAll("[data-rename]").forEach((btn) => {
+      btn.addEventListener("click", async (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const id = btn.getAttribute("data-rename");
+        const isPublic = btn.getAttribute("data-public") === "1";
+        const name = await askName(S.rename, btn.getAttribute("data-name") || "");
+        if (!name) return;
+        try {
+          await postJSON(isPublic ? "/api/public/folder/rename" : "/api/folders/rename",
+            { folder_id: id, name });
+          window.toast(S.renameOk);
+          window.location.reload();
+        } catch { window.toast(S.renameFail); }
+      });
+    });
+
+    // 改名：檔案列上的筆。只改顯示名稱，id 與位元組不動。
+    document.querySelectorAll("[data-rename-file]").forEach((btn) => {
+      btn.addEventListener("click", async (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const name = await askName(S.rename, btn.getAttribute("data-name") || "");
+        if (!name) return;
+        try {
+          await postJSON(btn.getAttribute("data-public") === "1"
+            ? "/api/public/file/rename" : "/api/files/rename",
+            { file_id: btn.getAttribute("data-rename-file"), name,
+              folder_id: btn.getAttribute("data-in-folder") || null });
+          window.toast(S.renameOk);
+          window.location.reload();
+        } catch { window.toast(S.renameFail); }
+      });
+    });
+
     // 私人資料夾分享連結：建立 / 取消
     document.querySelectorAll("[data-share-create]").forEach((btn) => {
       btn.addEventListener("click", async () => {
@@ -765,25 +877,37 @@
       });
     });
 
-    // 刪除私人資料夾（含其中的檔案）
+    // 刪除私人資料夾（含其中的檔案）。用 POST 才不會跳出目前的資料夾。
     document.querySelectorAll("[data-delete-dir]").forEach((btn) => {
-      btn.addEventListener("click", () => {
+      btn.addEventListener("click", async (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
         const name = btn.getAttribute("data-name") || "";
         const count = btn.getAttribute("data-count") || "0";
-        if (window.confirm(folderConfirm(name, count))) {
-          window.location.href = btn.getAttribute("data-delete-dir");
-        }
+        if (!window.confirm(folderConfirm(name, count))) return;
+        try {
+          const res = await fetch(btn.getAttribute("data-delete-dir"), { method: "POST" });
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          window.toast(S.deleted);
+          window.location.reload();
+        } catch { window.toast(S.deleteFail); }
       });
     });
 
     // 刪除公開資料夾（管理員）
     document.querySelectorAll("[data-delpubdir]").forEach((btn) => {
-      btn.addEventListener("click", () => {
+      btn.addEventListener("click", async (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
         const name = btn.getAttribute("data-name") || "";
         const count = btn.getAttribute("data-count") || "0";
-        if (window.confirm(pubFolderConfirm(name, count))) {
-          window.location.href = btn.getAttribute("data-delpubdir");
-        }
+        if (!window.confirm(pubFolderConfirm(name, count))) return;
+        try {
+          const res = await fetch(btn.getAttribute("data-delpubdir"), { method: "POST" });
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          window.toast(S.deleted);
+          window.location.reload();
+        } catch { window.toast(S.deleteFail); }
       });
     });
 

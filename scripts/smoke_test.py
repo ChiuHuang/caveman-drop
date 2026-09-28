@@ -76,9 +76,9 @@ import app.auth as _auth
 anon2 = TestClient(app)                       # never logged in, no cookie
 H = {**J, "X-Forwarded-Proto": "https", "CF-Connecting-IP": "203.0.113.11"}
 HB = {**B, "X-Forwarded-Proto": "https", "CF-Connecting-IP": "203.0.113.11"}
-assert "Private mode" in anon2.get("/?auth=passw", headers=HB).text, "?auth= must open private mode"
-assert "Private mode" not in anon2.get("/?auth=passw", headers=B).text, "plain http must not take ?auth="
-assert "Private mode" not in anon2.get("/?auth=wrong", headers=HB).text
+assert "data-drive" in anon2.get("/?auth=passw", headers=HB).text, "?auth= must open the drive"
+assert "data-drive" not in anon2.get("/?auth=passw", headers=B).text, "plain http must not take ?auth="
+assert "data-drive" not in anon2.get("/?auth=wrong", headers=HB).text
 r = anon2.get("/login?auth=passw", headers=HB, follow_redirects=False)
 assert r.status_code == 303 and r.headers["location"] == "/", "secret must be stripped on redirect"
 assert "passw" not in anon2.get("/?auth=passw", headers=HB).text, "password must never be echoed"
@@ -101,7 +101,7 @@ _auth._fails.clear()
 codes = [anon2.get("/?auth=nope", headers=HB).status_code for _ in range(12)]
 assert 429 in codes, codes
 _auth._fails.clear()
-assert "Private mode" in anon2.get("/?auth=passw", headers=HB).text, "another IP is unaffected"
+assert "data-drive" in anon2.get("/?auth=passw", headers=HB).text, "another IP is unaffected"
 print("?auth= param (proxy case) OK")
 
 # --- language follows the client IP: zh-TW for Taiwan ranges, English elsewhere ---
@@ -136,9 +136,8 @@ adm = TestClient(app)
 adm.post("/login", data={"password": "passw"})
 zh_adm = adm.get("/", headers=TW).text
 en_adm = adm.get("/", headers=EN_IP).text
-assert "私人模式" in zh_adm and "已登入" in zh_adm
-assert "Private mode" in en_adm and "Signed in" in en_adm
-assert "全部（" in zh_adm and "All (" in en_adm
+assert "我的雲端" in zh_adm and "My drive" in en_adm
+assert "公開（" in zh_adm and "Public (" in en_adm
 # Taiwan range boundaries from the brief
 for ip in ("1.32.208.0", "1.32.215.255", "36.224.0.0", "36.239.255.255", "120.120.0.0",
            "120.121.5.5", "120.123.255.255", "220.135.0.0", "220.135.255.255"):
@@ -422,13 +421,16 @@ assert r.status_code == 200
 print("login OK")
 
 r = c.get("/", headers=B)
-assert "Private mode" in r.text and "data-chunked" in r.text
-assert "Signed in" in r.text
-# admin sees private + public in tabs, and drag targets everywhere
-assert 'value="all"' in r.text and 'value="public"' in r.text and 'value="folders"' in r.text
+assert "My drive" in r.text and "data-chunked" in r.text
+assert "data-drive" in r.text
+# Drive layout: breadcrumb, folder tiles, drop targets, new-folder + upload icons
+assert 'class="crumb"' in r.text and "data-new-folder" in r.text and "data-drive-upload" in r.text
+assert 'data-dropscope="private"' in r.text and "data-dropscope=\"public\"" in r.text
+# two tabs only: the drive and the public area
+assert 'value="drive"' in r.text and 'value="public"' in r.text
+assert 'value="all"' not in r.text and 'value="folders"' not in r.text, "no more tab soup"
 assert 'class="legalbar"' in r.text and '/legal' in r.text, "legal link at the bottom"
-assert "public upload form" not in r.text
-print("private-mode dashboard OK (admin tabs, all files, drop targets)")
+print("private-mode dashboard OK (drive: tiles, breadcrumb, drop targets)")
 
 r = c.get("/upload", headers=B, follow_redirects=False)
 assert r.status_code == 303, "logged-in /upload should redirect to /"
@@ -480,11 +482,59 @@ wfid = m2.json()["file_id"]
 fl = c.get("/api/folders", headers=J)
 assert any(x["id"] == pfolder and x["count"] == 1 for x in fl.json()["folders"])
 r = c.get("/", headers=B)
-assert "工作" in r.text and "data-delete-dir" in r.text and "Uncategorised" in r.text
-assert "View link" in r.text and "Upload link" in r.text
-assert 'data-dropfolder="%s"' % pfolder in r.text, "folder card must be a drop target"
+assert "工作" in r.text and "data-delete-dir" in r.text and "My drive" in r.text
+assert "data-rename" in r.text, "folders can be renamed from the drive"
+assert 'data-dropfolder="%s"' % pfolder in r.text, "folder tile must be a drop target"
 assert 'data-dropscope="private"' in r.text and 'data-move=' in r.text
 assert "draggable=\"true\"" in r.text, "file rows must be draggable"
+# opening the folder lists its files and keeps the breadcrumb
+r = c.get(f"/?folder={pfolder}", headers=B)
+assert "w.txt" in r.text and "工作" in r.text, "folder view lists its files"
+assert f'href="/?folder={pfolder}"' not in r.text, "no self-link on the open folder tile"
+assert 'name="folder_id" value="%s"' % pfolder in r.text, "uploader targets the open folder"
+assert f'href="?folder={pfolder}&amp;lang=zh-TW"' in r.text, "language switch keeps the folder"
+# renaming from the API keeps the id and the files
+rn = c.post("/api/folders/rename", headers=J, json={"folder_id": pfolder, "name": "工作 renamed"})
+assert rn.status_code == 200 and rn.json()["name"] == "工作 renamed"
+assert any(x["id"] == pfolder and x["count"] == 1 for x in c.get("/api/folders", headers=J).json()["folders"])
+assert "工作 renamed" in c.get(f"/?folder={pfolder}", headers=B).text
+assert c.post("/api/folders/rename", headers=J, json={"folder_id": "nope", "name": "x"}).status_code == 404
+rn = c.post("/api/folders/rename", headers=J, json={"folder_id": pfolder, "name": "工作"})
+assert rn.json()["name"] == "工作"
+# a public folder can be renamed too, and its URL still works
+assert c.post("/api/public/folder/rename", headers=J,
+              json={"folder_id": folder, "name": "renamed public"}).json()["name"] == "renamed public"
+assert "renamed public" in c.get(f"/f/{folder}", headers=B).text
+assert c.post("/api/public/folder/rename", headers=J,
+              json={"folder_id": str(uuid.uuid4()), "name": "x"}).status_code == 404
+# renaming needs auth
+assert anon2.post("/api/folders/rename", headers=J,
+                  json={"folder_id": pfolder, "name": "x"}).status_code == 401
+assert anon2.post("/api/public/folder/rename", headers=J,
+                  json={"folder_id": folder, "name": "x"}).status_code == 401
+print("drive folders: rename + open + drop targets OK")
+
+# --- rename a file: display name only, id and bytes stay ---
+rf = c.post("/api/files/rename", headers=J, json={"file_id": wfid, "name": "renamed.txt"})
+assert rf.status_code == 200 and rf.json()["name"] == "renamed.txt"
+assert c.get(f"/dl/{wfid}", headers=J).content == b"data", "bytes must survive a rename"
+assert "renamed.txt" in c.get(f"/?folder={pfolder}", headers=B).text
+assert c.get("/api/files", headers=J).json()["files"][0]["id"] == wfid
+assert c.post("/api/files/rename", headers=J, json={"file_id": "nope", "name": "x"}).status_code == 404
+# public file rename, located by its folder
+pfile = c.get(f"/api/public/folder/{folder}", headers=J).json()["files"][0]
+rf = c.post("/api/public/file/rename", headers=J,
+            json={"file_id": pfile["id"], "name": "pub renamed.bin", "folder_id": folder})
+assert rf.status_code == 200 and rf.json()["name"] == "pub renamed.bin"
+pubmeta = c.get(f"/api/public/file/{folder}/{pfile['id']}", headers=J).json()
+assert pubmeta["filename"] == "pub renamed.bin" and pubmeta["file_id"] == pfile["id"]
+assert c.get(f"/dl/pub/{folder}/{pfile['id']}", headers=J).status_code == 200
+assert c.post("/api/public/file/rename", headers=J,
+              json={"file_id": "nope", "name": "x"}).status_code == 404
+# the drive offers a rename button on file rows too
+assert 'data-rename-file="%s"' % wfid in c.get(f"/?folder={pfolder}", headers=B).text
+assert 'data-rename-file="%s"' % pfile["id"] in c.get("/", headers=B).text
+print("rename files OK (display name only)")
 
 # --- share folder: view-only vs upload ---
 sv = c.post(f"/api/folders/{pfolder}/share", headers=J, json={"mode": "view"})
@@ -495,7 +545,7 @@ utok = su.json()["token"]
 assert su.json()["url"].endswith(f"/s/{utok}")
 
 sp = c.get(f"/s/{vtok}", headers=B)
-assert "工作" in sp.text and "w.txt" in sp.text and "View only" in sp.text
+assert "工作" in sp.text and "renamed.txt" in sp.text and "View only" in sp.text
 assert "Upload to this folder" not in sp.text
 sp = c.get(f"/s/{utok}", headers=B)
 assert "Can upload" in sp.text and "Upload to this folder" in sp.text
@@ -537,7 +587,7 @@ print("preview view OK")
 allpub = c.get("/api/public/files", headers=J)
 assert allpub.status_code == 200, allpub.text
 names = {f["name"] for f in allpub.json()["files"]}
-assert {"hello.txt", "j.txt"} <= names, names
+assert {"hello.txt", "pub renamed.bin"} <= names, names
 assert any(f["name"] == "派對" for f in allpub.json()["folders"])
 anon = TestClient(app)                    # no session cookie: must be refused
 r = anon.get("/api/public/files", headers=B)

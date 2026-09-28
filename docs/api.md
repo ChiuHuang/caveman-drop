@@ -52,6 +52,16 @@ curl -F file=@photo.jpg -F 'description=2026 澎湖行' http://localhost:20042/a
 `filename`、`total_chunks`、選填 `folder`（id 或名稱）、選填
 `description`）合併，回傳與單次上傳相同。
 
+### `POST /api/public/folder/rename`（管理員）
+
+```bash
+curl -X POST https://this.host/api/public/folder/rename \
+     -H "Content-Type: application/json" \
+     -d '{"folder_id":"FOLDER_UUID","name":"new name"}'
+```
+
+只改顯示名稱。`folder_id`、分享網址、裡面每個檔案的連結全部照舊可用。
+
 ### `POST /api/public/folder`
 
 建立空資料夾（選填 JSON `name`，自由文字，只建資料夾不傳檔）。回傳
@@ -104,8 +114,10 @@ curl -F file=@big.iso "https://proxy.example/https://this.host/api/upload_chunk?
 | `POST` | `/api/upload_chunk` | 欄位：`file_chunk`、`upload_id`、`index`、`filename` |
 | `POST` | `/api/merge_chunks` | JSON：`upload_id`、`filename`、`total_chunks`、選填 `folder_id` |
 | `POST` | `/api/folders` | JSON：`name` —— 新增私人雲端資料夾 |
+| `POST` | `/api/folders/rename` | JSON：`folder_id`、`name` —— 改資料夾名字（id、檔案、分享連結都不變） |
 | `GET` | `/api/folders` | 私人資料夾清單（含檔案數） |
-| `GET` | `/deldir/{folder_id}` | 刪除私人資料夾（含其中的檔案） |
+| `GET`/`POST` | `/deldir/{folder_id}` | 刪除私人資料夾（含其中的檔案） |
+| `GET` | `/?folder={folder_id}` | 登入後的雲端畫面：資料夾方塊、麵包屑、檔案清單 |
 | `POST` | `/api/folders/{id}/share` | JSON：`mode`（`view` 僅檢視 / `upload` 可上傳）—— 產生免登入分享連結 |
 | `POST` | `/api/share/revoke` | JSON：`token` —— 取消分享 |
 | `GET` | `/s/{token}` | 分享資料夾頁（瀏覽器 UI / 純文字） |
@@ -113,7 +125,11 @@ curl -F file=@big.iso "https://proxy.example/https://this.host/api/upload_chunk?
 | `GET` | `/dl/sh/{token}/{file_id}` | 分享下載（`?preview=1` 預覽） |
 | `GET` | `/dl/{file_id}` | 支援 Range 的私人下載（`?preview=1` 預覽） |
 | `GET` | `/view/{file_id}` | 線上預覽 |
-| `GET` | `/del/{file_id}` | 刪除（瀏覽器會先跳確認再導回首頁） |
+| `GET`/`POST` | `/del/{file_id}` | 刪除（`POST` 讓頁面停在原資料夾，不用導走） |
+| `POST` | `/api/files/move` | JSON：`file_id`、`folder_id`、`from_folder_id` —— 拖曳移動 |
+| `POST` | `/api/public/folder/rename` | JSON：`folder_id`、`name` —— 改公開資料夾名字（網址不變） |
+| `POST` | `/api/public/move` | JSON同上 —— 公開檔案拖曳移動 |
+| `POST` | `/delpub/{file_id}`、`/delpubdir/{folder_id}` | 從所有公開資料夾移除 |
 | `GET/POST` | `/m/{token}` | 單檔手機上傳（相容 iPhone 捷徑） |
 | `GET/POST` | `/login`、`GET /logout` | 密碼 session |
 

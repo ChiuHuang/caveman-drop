@@ -130,6 +130,30 @@ def _api_payload(request: Request) -> dict:
                 "url": f"{base}/f/{{folder_id}}",
                 "notes": "Human-friendly page for browsing/downloading/uploading to a folder — share this link with others.",
             },
+            "rename_folder_admin": {
+                "method": "POST",
+                "url": f"{base}/api/public/folder/rename",
+                "body": {"folder_id": "<uuid>", "name": "new display name"},
+                "notes": (
+                    "Admin only (password session, ?auth= or ?token=). Changes a public "
+                    "folder's display name. The folder_id and every existing link keep "
+                    "working."
+                ),
+            },
+            "private_drive": {
+                "method": "GET",
+                "url": f"{base}/?folder={{folder_id}}",
+                "notes": (
+                    "Signed-in drive view: folder tiles, breadcrumb, file list. Admin only. "
+                    "GET / with no folder lists the uncategorised files."
+                ),
+            },
+            "rename_private_folder_admin": {
+                "method": "POST",
+                "url": f"{base}/api/folders/rename",
+                "body": {"folder_id": "<uuid>", "name": "new display name"},
+                "notes": "Admin only. Changes a private folder's name; id, files and share links stay.",
+            },
         },
     }
 
@@ -255,6 +279,23 @@ Supports HTTP Range requests.
 ## Human upload/share page
 GET {base}/upload
 GET {base}/f/{{folder_id}}
+
+## Admin: rename a folder
+POST {base}/api/public/folder/rename
+JSON: {{"folder_id": "<uuid>", "name": "new display name"}}
+Admin only (password session, `?auth=`, or `?token=`). Only the display name
+changes — the folder id, its share URL and every file link keep working.
+POST {base}/api/folders/rename does the same for a private folder.
+
+## Admin: the private drive
+GET {base}/?folder={{folder_id}}
+Signed-in view: folder tiles (each one a drop target), a breadcrumb, and the
+file list of the folder being viewed. Without `folder` it lists the
+uncategorised files. Dragging a file row onto a folder tile moves it there;
+dragging files from the desktop uploads them into the tile. Renames, new
+folders, sharing and deletes all happen from the tiles, and
+POST /del/{{file_id}} and /deldir/{{folder_id}} accept POST as well as GET so
+the page does not have to navigate away.
 
 ## Full docs
 GET {base}/docs (HTML for browsers, Markdown for agents via ?format=text)

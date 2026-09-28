@@ -496,7 +496,7 @@ def public_folder_files(folder_id: str) -> list[dict[str, Any]]:
     return out
 
 
-def public_folder_list() -> list[dict[str, Any]]:
+def public_folder_list(default_name: str = "") -> list[dict[str, Any]]:
     """Every public folder with its file count (admin view)."""
     out = []
     for d in listdir_safe(settings.public_dir):
@@ -511,7 +511,7 @@ def public_folder_list() -> list[dict[str, Any]]:
         out.append(
             {
                 "id": d,
-                "name": public_folder_name(d) or "未命名資料夾",
+                "name": public_folder_name(d) or default_name or "folder",
                 "count": len(files),
                 "size": sum(f["size"] for f in files),
                 "ctime": max([ctime] + [f["ctime"] for f in files]),
@@ -548,6 +548,38 @@ def move_entry(dirname: str, file_id: str, folder_id: str | None) -> bool:
     meta["folder"] = folder_id or None
     save_entry(dirname, file_id, meta)
     return True
+
+
+def rename_file_entry(dirname: str, file_id: str, name: str) -> str:
+    """Change a stored file's display name.
+
+    Only `filename` moves: the id is the content hash, the bytes in the bin store
+    are untouched, and `ext` stays as it was so legacy paths and short URLs keep
+    resolving.
+    """
+    meta = entry_meta(dirname, file_id)
+    if meta is None:
+        raise HTTPException(404, "File not found")
+    new = clean_name(name, 120) or str(meta.get("filename", file_id))
+    meta["filename"] = new
+    save_entry(dirname, file_id, meta)
+    return new
+
+
+def find_public_entry_dir(file_id: str, folder_id: str = "") -> str:
+    """Which public directory holds this file: a named folder, a single, or a scan."""
+    if HASH_ID_RE.fullmatch(file_id or "") or PUBLIC_ID_RE.fullmatch(file_id or ""):
+        if folder_id:
+            cand = os.path.join(settings.public_dir, folder_id)
+            if os.path.isdir(cand) and os.path.exists(os.path.join(cand, file_id + ".json")):
+                return cand
+        if os.path.exists(os.path.join(settings.single_dir, file_id + ".json")):
+            return settings.single_dir
+        for d in listdir_safe(settings.public_dir):
+            cand = os.path.join(settings.public_dir, d)
+            if os.path.isdir(cand) and os.path.exists(os.path.join(cand, file_id + ".json")):
+                return cand
+    raise HTTPException(404, "File not found")
 
 
 def delete_public_folder(folder_id: str) -> int:
@@ -734,15 +766,48 @@ def save_private_folders(d: dict) -> None:
         json.dump(d, f, ensure_ascii=False)
 
 
-def create_private_folder(name: str) -> tuple[str, dict]:
+def create_private_folder(name: str, default_name: str = "") -> tuple[str, dict]:
     import uuid
 
     fid = str(uuid.uuid4())
-    meta = {"name": (name or "").strip()[:64] or "未命名資料夾", "ctime": time.time()}
+    meta = {"name": clean_name(name) or default_name or "folder", "ctime": time.time()}
     d = get_private_folders()
     d[fid] = meta
     save_private_folders(d)
     return fid, meta
+
+
+def rename_private_folder(fid: str, name: str, default_name: str = "") -> str:
+    """Change a private folder's display name. Returns the name that stuck."""
+    d = get_private_folders()
+    if fid not in d:
+        raise HTTPException(404, "Folder not found")
+    new = clean_name(name) or default_name or d[fid].get("name", "")
+    d[fid]["name"] = new
+    d[fid]["mtime"] = time.time()
+    save_private_folders(d)
+    return new
+
+
+def rename_public_folder(folder_id: str, name: str, default_name: str = "") -> str:
+    """Change a public folder's display name (folder.json), id and links stay."""
+    d = public_folder_dir(folder_id)
+    if not os.path.isdir(d):
+        raise HTTPException(404, "Folder not found")
+    jp = os.path.join(d, "folder.json")
+    try:
+        with open(jp, encoding="utf-8") as f:
+            meta = json.load(f)
+        if not isinstance(meta, dict):
+            meta = {}
+    except (OSError, ValueError):
+        meta = {}
+    new = clean_name(name) or default_name or str(meta.get("name", ""))
+    meta["name"] = new
+    meta["mtime"] = time.time()
+    with open(jp, "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False)
+    return new
 
 
 def delete_private_folder(fid: str) -> int:
@@ -785,27 +850,27 @@ def clean_name(name: str, limit: int = 64) -> str:
     return re.sub(r"[\x00-\x1f\x7f]", "", str(name or "")).strip()[:limit]
 
 
-def create_public_folder(name: str) -> tuple[str, dict[str, Any]]:
+def create_public_folder(name: str, default_name: str = "") -> tuple[str, dict[str, Any]]:
     """Create an empty public folder under a free-text name."""
     import uuid
 
     fid = str(uuid.uuid4())
     fdir = public_folder_dir(fid)
     os.makedirs(fdir, exist_ok=True)
-    meta = {"name": clean_name(name) or "未命名資料夾", "ctime": time.time()}
+    meta = {"name": clean_name(name) or default_name or "folder", "ctime": time.time()}
     with open(os.path.join(fdir, "folder.json"), "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False)
     return fid, meta
 
 
-def resolve_public_folder(ref: str) -> str:
+def resolve_public_folder(ref: str, default_name: str = "") -> str:
     """A folder_id is used as-is; any other text becomes a new folder's name."""
     ref = str(ref or "").strip()
     if not ref:
         raise HTTPException(400, "Missing folder")
     if PUBLIC_ID_RE.fullmatch(ref):
         return ref
-    return create_public_folder(ref)[0]
+    return create_public_folder(ref, default_name)[0]
 
 
 def _shares_path() -> str:
