@@ -2,6 +2,13 @@
 
 基底網址：伺服器根目錄，例如 `http://localhost:20042`。
 
+連結一律跟著請求走：用 HTTPS 進來就回 HTTPS（讀 `Forwarded` /
+`X-Forwarded-Proto`）。想固定網域就設 `PUBLIC_BASE_URL`。
+
+`file_id` 就是檔案內容的 **sha256**：id 相同代表位元組一模一樣。位元組只存
+一份（`BIN_DIR`，預設 `bin/`），所以重複上傳不會多佔空間，連結也相同。
+回應會帶 `deduplicated: true` 表示這份位元組之前就存過。
+
 內容協商：帶瀏覽器 `User-Agent` + `Accept: text/html` 會拿到 MDUI HTML
 控制台；其他一律拿 JSON / 純文字。`?format=json|html|text` 可強制指定。
 
@@ -9,21 +16,27 @@
 
 ### `POST /api/public/upload`
 
-匿名上傳。Multipart 欄位：`file`（必填）、`folder`（選填，既有資料夾
-id）。不帶 folder 就是單檔直連，不會建資料夾，回傳 `file_id`、`filename`、
-`size_bytes`、`download_url`、`file_api_url`；帶 folder 才回傳
-`folder_url` 等資料夾欄位。
+匿名上傳。Multipart 欄位：`file`（必填）、`folder`（選填）。`folder` 給既有
+資料夾 id 就加進去，給任意文字就以其為名稱自動開一個新資料夾。不帶 folder
+就是單檔直連，不會建資料夾，回傳 `file_id`、`filename`、`size_bytes`、
+`download_url`、`file_api_url`；帶 folder 才回傳 `folder_url` 等資料夾欄位。
+
+```bash
+curl -F file=@photo.jpg http://localhost:20042/api/public/upload
+curl -F file=@photo.jpg -F folder=相簿 http://localhost:20042/api/public/upload
+```
 
 ### `POST /api/public/chunk` → `POST /api/public/merge_chunks`
 
 分段上傳（瀏覽器會自動用）。先並行上傳分塊（multipart：`file_chunk`、
 `upload_id`、`index`、`filename`），再 POST JSON（`upload_id`、
-`filename`、`total_chunks`、選填 `folder`）合併，回傳與單次上傳相同。
+`filename`、`total_chunks`、選填 `folder`，同樣可填 id 或名稱）合併，
+回傳與單次上傳相同。
 
 ### `POST /api/public/folder`
 
-建立空資料夾（選填 JSON `name`）。回傳 `folder_id`、`folder_name`、
-`folder_url`、`upload_url`、`folder_api_url`。
+建立空資料夾（選填 JSON `name`，自由文字，只建資料夾不傳檔）。回傳
+`folder_id`、`folder_name`、`folder_url`、`upload_url`、`folder_api_url`。
 
 ### `GET /api/public/folder/{folder_id}`
 

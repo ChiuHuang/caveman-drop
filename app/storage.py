@@ -1,12 +1,21 @@
-"""Filesystem storage helpers shared by all routes."""
+"""Filesystem storage helpers shared by all routes.
+
+File ids are the sha256 of the file's bytes, so the same content always lands on
+the same id and the same blob in the bin store (settings.bin_dir) — uploading it
+twice costs one metadata entry, not a second copy. Folder ids stay UUIDs.
+Payloads written before this scheme (UUID file ids) are still served, so old
+links keep working.
+"""
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import mimetypes
 import os
 import re
+import shutil
 import time
 from collections import defaultdict, deque
 from typing import Any
@@ -17,6 +26,7 @@ from fastapi.responses import StreamingResponse
 from .config import settings
 
 PUBLIC_ID_RE = re.compile(r"^[0-9a-fA-F-]{36}$")
+HASH_ID_RE = re.compile(r"^[0-9a-f]{64}$")
 
 _upload_log: dict[str, list[float]] = defaultdict(list)
 _public_folder_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -143,6 +153,88 @@ def validate_public_id(value: str, label: str = "id") -> None:
         raise HTTPException(400, f"Invalid public {label}")
 
 
+def validate_file_id(value: str) -> None:
+    """sha256 file id, or a legacy UUID id from before content addressing."""
+    value = value or ""
+    if not HASH_ID_RE.fullmatch(value) and not PUBLIC_ID_RE.fullmatch(value):
+        raise HTTPException(400, "Invalid public file id")
+
+
+# ---- content-addressed blob store (bin/) ----
+
+
+def bin_path(file_id: str) -> str:
+    """Where the bytes of `file_id` live. Two-level fanout keeps dirs small."""
+    validate_file_id(file_id)
+    if not HASH_ID_RE.fullmatch(file_id):
+        raise HTTPException(400, "Not a content id")
+    return os.path.join(settings.bin_dir, file_id[:2], file_id[2:4], file_id)
+
+
+def payload_path(file_id: str, legacy_dir: str, ext: str = "") -> str:
+    """Blob for a new-style id, or the old in-folder copy for a legacy UUID id."""
+    if HASH_ID_RE.fullmatch(file_id or ""):
+        return bin_path(file_id)
+    validate_file_id(file_id)
+    return os.path.join(legacy_dir, file_id + (ext or ""))
+
+
+def file_sha256(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while True:
+            block = f.read(1024 * 1024)
+            if not block:
+                break
+            h.update(block)
+    return h.hexdigest()
+
+
+def store_blob(src: str, known_hash: str | None = None) -> str:
+    """Move `src` into the bin store under its sha256. Same bytes twice = one copy."""
+    file_id = known_hash or file_sha256(src)
+    target = bin_path(file_id)
+    if os.path.exists(target):
+        os.remove(src)  # already stored — don't keep a second copy
+        return file_id
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    try:
+        os.replace(src, target)
+    except OSError:  # different filesystem (tmp mounted elsewhere)
+        shutil.move(src, target)
+    return file_id
+
+
+def blob_referenced(file_id: str) -> bool:
+    """True if any metadata entry still points at this blob."""
+    if not HASH_ID_RE.fullmatch(file_id or ""):
+        return False
+    roots = (settings.public_dir, settings.single_dir, settings.upload_dir)
+    for root in roots:
+        for dirpath, _, names in os.walk(root):
+            for fn in names:
+                if fn != file_id + ".json":
+                    continue
+                try:
+                    with open(os.path.join(dirpath, fn), encoding="utf-8") as f:
+                        if json.load(f):
+                            return True
+                except (OSError, ValueError):
+                    return True
+    return False
+
+
+def drop_blob(file_id: str) -> bool:
+    """Delete a blob once nothing references it. True if bytes were removed."""
+    if not HASH_ID_RE.fullmatch(file_id or "") or blob_referenced(file_id):
+        return False
+    try:
+        os.remove(bin_path(file_id))
+        return True
+    except OSError:
+        return False
+
+
 def validate_upload_id(value: str) -> None:
     if not PUBLIC_ID_RE.fullmatch(value or ""):
         raise HTTPException(400, "Invalid upload id")
@@ -158,11 +250,24 @@ def chunk_dir(prefix: str, upload_id: str) -> str:
     return d
 
 
-def assemble_chunks(chunk_dirname: str, dest: str, total_chunks: int, max_bytes: int | None) -> int:
-    """Concatenate part_0..N into dest, then clean up. None = no size cap."""
+def assemble_chunks(
+    chunk_dirname: str,
+    total_chunks: int,
+    max_bytes: int | None,
+    staging: str | None = None,
+) -> tuple[str, int]:
+    """Concatenate part_0..N into the bin store keyed by sha256.
+
+    Returns (file_id, bytes). `staging` holds the temporary copy (same volume as
+    the bin store by default, so the final move is a rename). None = no cap.
+    """
     limit = settings.max_chunked_parts
     if not 1 <= total_chunks <= limit:
         raise HTTPException(400, f"total_chunks must be 1..{limit}")
+    staging = staging or settings.tmp_dir
+    os.makedirs(staging, exist_ok=True)
+    dest = os.path.join(staging, f"asm_{os.getpid()}_{int(time.time() * 1000) % 10_000_000}")
+    digest = hashlib.sha256()
     written = 0
     try:
         with open(dest, "wb") as out:
@@ -178,7 +283,9 @@ def assemble_chunks(chunk_dirname: str, dest: str, total_chunks: int, max_bytes:
                         written += len(c)
                         if max_bytes is not None and written > max_bytes:
                             raise HTTPException(413, "File exceeds the size limit")
+                        digest.update(c)
                         out.write(c)
+        file_id = store_blob(dest, digest.hexdigest())
     except HTTPException:
         if os.path.exists(dest):
             os.remove(dest)
@@ -192,12 +299,42 @@ def assemble_chunks(chunk_dirname: str, dest: str, total_chunks: int, max_bytes:
         os.rmdir(chunk_dirname)
     except OSError:
         pass
-    return written
+    return file_id, written
 
 
 def public_folder_dir(folder_id: str) -> str:
     validate_public_id(folder_id, "folder id")
     return os.path.join(settings.public_dir, folder_id)
+
+
+def save_entry(dirname: str, file_id: str, meta: dict[str, Any]) -> dict[str, Any]:
+    """Write the metadata sidecar for one file entry."""
+    meta = {"ctime": time.time(), **meta}
+    with open(os.path.join(dirname, file_id + ".json"), "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False)
+    return meta
+
+
+def entry_meta(dirname: str, file_id: str) -> dict[str, Any] | None:
+    """Metadata for one file entry, plus its payload size, or None if it is gone."""
+    if not (HASH_ID_RE.fullmatch(file_id or "") or PUBLIC_ID_RE.fullmatch(file_id or "")):
+        return None  # e.g. folder.json — not a file entry
+    jp = os.path.join(dirname, file_id + ".json")
+    if not os.path.exists(jp):
+        return None
+    try:
+        with open(jp, encoding="utf-8") as f:
+            meta = json.load(f)
+    except (OSError, ValueError):
+        return None
+    meta.setdefault("filename", file_id)
+    try:
+        path = payload_path(file_id, dirname, meta.get("ext", ""))
+        meta["size"] = int(meta.get("size") or os.path.getsize(path))
+        meta["ctime"] = meta.get("ctime") or os.path.getctime(path)
+    except OSError:
+        return None
+    return meta
 
 
 def public_folder_files(folder_id: str) -> list[dict[str, Any]]:
@@ -206,30 +343,25 @@ def public_folder_files(folder_id: str) -> list[dict[str, Any]]:
     if not os.path.isdir(d):
         return out
     for fn in os.listdir(d):
-        if not fn.endswith(".json"):
+        if not fn.endswith(".json") or fn == "folder.json":
             continue
         fid = fn[:-5]
-        try:
-            with open(os.path.join(d, fn), encoding="utf-8") as f:
-                meta = json.load(f)
-            path = os.path.join(d, fid + meta.get("ext", ""))
-            if not os.path.exists(path):
-                continue
-            out.append(
-                {
-                    "id": fid,
-                    "name": meta["filename"],
-                    "size": os.path.getsize(path),
-                    "ctime": meta.get("ctime", os.path.getctime(path)),
-                    "content_type": meta.get(
-                        "content_type",
-                        mimetypes.guess_type(meta.get("filename", ""))[0]
-                        or "application/octet-stream",
-                    ),
-                }
-            )
-        except Exception:
+        meta = entry_meta(d, fid)
+        if meta is None:
             continue
+        out.append(
+            {
+                "id": fid,
+                "name": meta["filename"],
+                "size": meta["size"],
+                "ctime": meta["ctime"],
+                "content_type": meta.get(
+                    "content_type",
+                    mimetypes.guess_type(meta.get("filename", ""))[0]
+                    or "application/octet-stream",
+                ),
+            }
+        )
     out.sort(key=lambda x: x["ctime"], reverse=True)
     return out
 
@@ -243,27 +375,22 @@ def private_files() -> list[dict[str, Any]]:
         if not fn.endswith(".json") or fn in ("folders.json", "shares.json"):
             continue
         fid = fn[:-5]
-        try:
-            with open(os.path.join(settings.upload_dir, fn), encoding="utf-8") as f:
-                meta = json.load(f)
-            path = os.path.join(settings.upload_dir, fid + meta.get("ext", ""))
-            if not os.path.exists(path):
-                continue
-            size = os.path.getsize(path)
-            fid_folder = meta.get("folder")
-            files.append(
-                {
-                    "id": fid,
-                    "name": meta["filename"],
-                    "size": size // 1024,
-                    "bytes": size,
-                    "ctime": os.path.getctime(path),
-                    "folder": fid_folder,
-                    "folder_name": (folders.get(fid_folder) or {}).get("name", "") if fid_folder else "",
-                }
-            )
-        except Exception:
+        meta = entry_meta(settings.upload_dir, fid)
+        if meta is None:
             continue
+        size = meta["size"]
+        fid_folder = meta.get("folder")
+        files.append(
+            {
+                "id": fid,
+                "name": meta["filename"],
+                "size": size // 1024,
+                "bytes": size,
+                "ctime": meta["ctime"],
+                "folder": fid_folder,
+                "folder_name": (folders.get(fid_folder) or {}).get("name", "") if fid_folder else "",
+            }
+        )
     files.sort(key=lambda x: x["ctime"], reverse=True)
     return files
 
@@ -340,17 +467,38 @@ def folder_lock(folder_id: str) -> asyncio.Lock:
 
 
 def single_meta(file_id: str) -> dict[str, Any]:
-    validate_public_id(file_id, "file id")
-    jp = os.path.join(settings.single_dir, file_id + ".json")
-    if not os.path.exists(jp):
+    meta = entry_meta(settings.single_dir, file_id)
+    if meta is None:
         raise HTTPException(404, "File not found")
-    with open(jp, encoding="utf-8") as f:
-        return json.load(f)
+    return meta
 
 
-def single_path(file_id: str, ext: str = "") -> str:
-    validate_public_id(file_id, "file id")
-    return os.path.join(settings.single_dir, file_id + ext)
+def single_blob(file_id: str, ext: str = "") -> str:
+    """Payload of a folderless public file (bin store, or legacy copy)."""
+    return payload_path(file_id, settings.single_dir, ext)
+
+
+def delete_file_entry(dirname: str, file_id: str) -> bool:
+    """Remove one metadata entry, and its blob when nothing else points at it."""
+    ext = ""
+    try:
+        with open(os.path.join(dirname, file_id + ".json"), encoding="utf-8") as f:
+            ext = str(json.load(f).get("ext", "") or "")
+    except (OSError, ValueError):
+        pass
+    removed = False
+    try:
+        os.remove(os.path.join(dirname, file_id + ".json"))
+        removed = True
+    except OSError:
+        pass
+    if not HASH_ID_RE.fullmatch(file_id or ""):
+        try:  # legacy copy stored next to the metadata
+            os.remove(os.path.join(dirname, file_id + ext))
+        except OSError:
+            pass
+    drop_blob(file_id)
+    return removed
 
 
 def _private_folders_path() -> str:
@@ -397,15 +545,8 @@ def delete_private_folder(fid: str) -> int:
         except (OSError, ValueError):
             continue
         if meta.get("folder") == fid:
-            file_id = fn[:-5]
-            p = os.path.join(settings.upload_dir, file_id + meta.get("ext", ""))
-            try:
-                if os.path.exists(p):
-                    os.remove(p)
-                os.remove(jp)
+            if delete_file_entry(settings.upload_dir, fn[:-5]):
                 n += 1
-            except OSError:
-                pass
     d.pop(fid, None)
     save_private_folders(d)
     shares = get_shares()
@@ -422,6 +563,34 @@ def public_folder_name(folder_id: str) -> str:
         return str(data.get("name", "") or "")
     except (OSError, ValueError):
         return ""
+
+
+def clean_name(name: str, limit: int = 64) -> str:
+    """Free-text display name: control characters out, length capped."""
+    return re.sub(r"[\x00-\x1f\x7f]", "", str(name or "")).strip()[:limit]
+
+
+def create_public_folder(name: str) -> tuple[str, dict[str, Any]]:
+    """Create an empty public folder under a free-text name."""
+    import uuid
+
+    fid = str(uuid.uuid4())
+    fdir = public_folder_dir(fid)
+    os.makedirs(fdir, exist_ok=True)
+    meta = {"name": clean_name(name) or "未命名資料夾", "ctime": time.time()}
+    with open(os.path.join(fdir, "folder.json"), "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False)
+    return fid, meta
+
+
+def resolve_public_folder(ref: str) -> str:
+    """A folder_id is used as-is; any other text becomes a new folder's name."""
+    ref = str(ref or "").strip()
+    if not ref:
+        raise HTTPException(400, "Missing folder")
+    if PUBLIC_ID_RE.fullmatch(ref):
+        return ref
+    return create_public_folder(ref)[0]
 
 
 def _shares_path() -> str:
@@ -483,6 +652,25 @@ def threads_for_speed(bps: float) -> int:
     if bps > 2 * MB:
         return 64
     return 128
+
+
+def speed_probe(nbytes: int, request: Request, client_ms: str | None = None) -> tuple[int, float]:
+    """Link speed + recommended thread count.
+
+    The browser's own timing wins when present: it covers DNS/TCP/TLS and the
+    full round trip, which a server-side timer (started only once the request
+    reached the app) cannot see. Falls back to the server-side elapsed time.
+    """
+    server_s = max(time.time() - getattr(request.state, "t0", time.time()), 0.001)
+    elapsed = server_s
+    try:
+        client_s = float(client_ms or 0) / 1000.0
+    except (TypeError, ValueError):
+        client_s = 0.0
+    if 0.002 <= client_s <= 60:
+        elapsed = client_s
+    bps = nbytes / elapsed
+    return threads_for_speed(bps), bps
 
 
 def probe_check(ip: str) -> None:

@@ -120,7 +120,7 @@ def thread_panel() -> str:
     return """<div class="tp" data-tp hidden>
       <div class="tp-top">
         <strong data-tp-pct>0%</strong>
-        <span data-tp-speed class="muted"></span>
+        <span data-tp-speed class="tpspeed"></span>
         <span data-tp-note class="tp-note"></span>
       </div>
       <mdui-linear-progress data-tp-bar></mdui-linear-progress>
@@ -293,41 +293,52 @@ def private_panel(files: list[dict], base: str, folders: dict, shares: dict) -> 
         {"".join(sections)}"""
 
 
-def public_upload_form(folder_id: str | None = None) -> str:
-    """Public upload UI. Folder page: join-only form. Else: upload/create tabs."""
-    if folder_id:
-        return f"""
-            {limits_note()}
-            <form action="/api/public/chunk" method="post" data-chunked data-merge="/api/public/merge_chunks" data-public="1" data-probe="/api/public/probe">
-              <input type="hidden" name="folder" value="{html.escape(folder_id)}">
+def _upload_row(folder: str | None = None) -> str:
+    """File picker row + optional folder field, both on their own line."""
+    field = (
+        f'<input type="hidden" name="folder" value="{html.escape(folder)}">'
+        if folder
+        else """
+              <div class="upfield">
+                <mdui-text-field name="folder" label="資料夾（選填）"></mdui-text-field>
+                <p class="muted up-hint">留空＝只給單檔永久連結。貼上資料夾 ID 就加進去，填自訂文字就自動開一個新資料夾。</p>
+              </div>"""
+    )
+    return f"""
               <div class="form-row">
                 <input type="file" name="file" required>
-                <mdui-button type="submit">上傳</mdui-button>
+                <mdui-button type="submit" icon="cloud_upload">{"加進資料夾" if folder else "上傳"}</mdui-button>
               </div>
+              {field}"""
+
+
+def public_upload_form(folder_id: str | None = None) -> str:
+    """Public upload UI. Folder page: join-only form. Else: upload/create tabs."""
+    form = f"""
+            {limits_note()}
+            <form action="/api/public/chunk" method="post" data-chunked data-merge="/api/public/merge_chunks" data-public="1" data-probe="/api/public/probe">
+              {_upload_row(folder_id)}
               {thread_panel()}
             </form>
             <div data-upload-result></div>"""
+    if folder_id:
+        return form
     return f"""
             <mdui-tabs value="up" data-tabs>
               <mdui-tab value="up">上傳檔案</mdui-tab>
               <mdui-tab value="mkdir">建立資料夾</mdui-tab>
             </mdui-tabs>
             <div data-tabpanel="up">
-              {limits_note()}
-              <form action="/api/public/chunk" method="post" data-chunked data-merge="/api/public/merge_chunks" data-public="1" data-probe="/api/public/probe">
-                <div class="form-row">
-                  <input type="file" name="file" required>
-                  <mdui-button type="submit">上傳</mdui-button>
-                </div>
-                {thread_panel()}
-              </form>
-              <div data-upload-result></div>
+              {form}
             </div>
             <div data-tabpanel="mkdir" hidden>
-              <p class="muted">建好後把資料夾連結分享給別人，對方就能往裡面上傳。</p>
+              <p class="muted">先開一個有名字的資料夾，把連結分享出去，別人就能往裡面上傳。</p>
               <div class="form-row">
-                <mdui-text-field name="mkdir-name" label="資料夾名稱（選填）"></mdui-text-field>
-                <mdui-button data-create-folder>建立資料夾</mdui-button>
+                <div class="upfield">
+                  <mdui-text-field name="mkdir-name" label="資料夾名稱"></mdui-text-field>
+                  <p class="up-hint">會當成分享頁的標題，留空就叫「未命名資料夾」。</p>
+                </div>
+                <mdui-button data-create-folder icon="create_new_folder">建立</mdui-button>
               </div>
               <div data-upload-result></div>
             </div>"""

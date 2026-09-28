@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import html
-import json
 import mimetypes
 import os
 import uuid
@@ -18,6 +17,7 @@ from ..negotiation import wants_html
 from ..storage import (
     MAX_CHUNK_BYTES,
     assemble_chunks,
+    bin_path,
     bw_pace,
     bw_record,
     bw_status,
@@ -26,20 +26,26 @@ from ..storage import (
     client_ip,
     create_private_folder,
     create_share,
+    delete_file_entry,
     delete_private_folder,
+    entry_meta,
     get_private_folders,
     get_share,
     get_shares,
+    payload_path,
     private_files,
     probe_check,
     revoke_share,
+    save_entry,
+    speed_probe,
+    store_blob,
     stream_download,
     tag_ip,
     tagged_threads,
-    threads_for_speed,
     validate_upload_id,
 )
 from ..ui import page, private_panel, share_file_rows, thread_panel
+from ..urls import base_url
 
 router = APIRouter()
 
@@ -75,7 +81,7 @@ def _check_private(request: Request) -> None:
 async def mobile_get(request: Request, token: str):
     if token != settings.mobile_token:
         return PlainTextResponse("Invalid mobile upload token.", status_code=403)
-    base = str(request.base_url).rstrip("/")
+    base = base_url(request)
     return PlainTextResponse(
         "CaveMan Drop mobile upload endpoint\n\n"
         f"POST a multipart/form-data field named 'file' to {base}/m/{token}\n"
@@ -91,31 +97,37 @@ async def mobile_post(request: Request, token: str, file: Optional[UploadFile] =
         raise HTTPException(403)
     if not file or not file.filename:
         return PlainTextResponse("No file supplied.", status_code=400)
-    fid = str(uuid.uuid4())
     _, ext = os.path.splitext(file.filename)
-    with open(os.path.join(settings.upload_dir, fid + ext), "wb") as f:
+    tmp = os.path.join(settings.tmp_dir, f"up_{uuid.uuid4()}")
+    with open(tmp, "wb") as f:
         f.write(await file.read())
-    with open(os.path.join(settings.upload_dir, fid + ".json"), "w", encoding="utf-8") as f:
-        json.dump({"filename": file.filename, "ext": ext}, f)
+    fid = store_blob(tmp)
+    save_entry(
+        settings.upload_dir,
+        fid,
+        {
+            "filename": file.filename,
+            "ext": ext,
+            "content_type": mimetypes.guess_type(file.filename)[0] or "application/octet-stream",
+            "size": os.path.getsize(bin_path(fid)),
+        },
+    )
     return PlainTextResponse(f"Uploaded: {file.filename}\nFile ID: {fid}")
 
 
 @router.post("/api/probe")
-async def private_probe(request: Request, probe: UploadFile = File(...)):
-    """1MB speed probe for the private uploader."""
-    import time as _time
-
+async def private_probe(request: Request, probe: UploadFile = File(...), ms: Optional[str] = Form(None)):
+    """Speed probe for the private uploader."""
     _check_private(request)
     ip = client_ip(request)
     probe_check(ip)
     data = await probe.read()
     await probe.close()
-    if len(data) > 2 * 1024 * 1024:
+    if len(data) > 8 * 1024 * 1024:
         raise HTTPException(413, "Probe too large")
-    elapsed = max(_time.time() - getattr(request.state, "t0", _time.time()), 0.001)
-    threads = threads_for_speed(len(data) / elapsed)
+    threads, bps = speed_probe(len(data), request, ms)
     tag_ip(ip, threads)
-    return {"threads": threads, "you": ip}
+    return {"threads": threads, "mbps": round(bps * 8 / 1_000_000, 2), "you": ip}
 
 
 @router.post("/api/folders")
@@ -140,7 +152,7 @@ async def list_folders(request: Request):
     from ..storage import get_shares as _gs
 
     shares = _gs()
-    base = str(request.base_url).rstrip("/")
+    base = base_url(request)
     if wants_html(request):
         return RedirectResponse("/", status_code=303)
     return {
@@ -178,7 +190,7 @@ async def share_folder(request: Request, folder_id: str, payload: SharePayload):
     if not request.session.get("auth"):
         raise HTTPException(401)
     token, meta = create_share(folder_id, payload.mode)
-    base = str(request.base_url).rstrip("/")
+    base = base_url(request)
     return {"success": True, "token": token, "mode": meta["mode"], "url": f"{base}/s/{token}"}
 
 
@@ -209,16 +221,18 @@ async def share_merge_chunks(request: Request, payload: ShareMergePayload):
     ip = client_ip(request)
     check_rate_limit(ip)
     validate_upload_id(payload.upload_id)
-    fid = str(uuid.uuid4())
     _, ext = _os.path.splitext(payload.filename)
-    dest = _os.path.join(settings.upload_dir, fid + ext)
     cdir = _os.path.join(settings.tmp_dir, f"pub_{payload.upload_id}")
-    written = assemble_chunks(cdir, dest, payload.total_chunks, None)
+    fid, written = assemble_chunks(cdir, payload.total_chunks, None)
     content_type = _mime.guess_type(payload.filename)[0] or "application/octet-stream"
-    with open(_os.path.join(settings.upload_dir, fid + ".json"), "w", encoding="utf-8") as f:
-        json.dump({"filename": payload.filename, "ext": ext, "content_type": content_type, "folder": folder_id}, f)
+    save_entry(
+        settings.upload_dir,
+        fid,
+        {"filename": payload.filename, "ext": ext, "content_type": content_type,
+         "folder": folder_id, "size": written},
+    )
     bw_record(ip, None, written)
-    base = str(request.base_url).rstrip("/")
+    base = base_url(request)
     download_url = f"{base}/dl/sh/{payload.token}/{fid}"
     return {
         "success": True,
@@ -235,20 +249,17 @@ async def share_merge_chunks(request: Request, payload: ShareMergePayload):
 @router.get("/dl/sh/{token}/{file_id}")
 async def share_download(request: Request, token: str, file_id: str, preview: bool = False):
     import mimetypes as _mime
-    import os as _os
 
     share = get_share(token)
     if not share:
         raise HTTPException(404)
-    jp = _os.path.join(settings.upload_dir, file_id + ".json")
-    if not _os.path.exists(jp):
+    meta = entry_meta(settings.upload_dir, file_id)
+    if meta is None:
         raise HTTPException(404)
-    with open(jp, encoding="utf-8") as f:
-        meta = json.load(f)
     if meta.get("folder") != share["folder_id"]:
         raise HTTPException(404)
-    path = _os.path.join(settings.upload_dir, file_id + meta.get("ext", ""))
-    ctype = meta.get("content_type") or _mime.guess_type(meta.get("filename", ""))[0] if preview else None
+    path = payload_path(file_id, settings.upload_dir, meta.get("ext", ""))
+    ctype = meta.get("content_type") or _mime.guess_type(meta["filename"])[0] if preview else None
     return stream_download(request, path, meta["filename"], inline=preview, content_type=ctype)
 
 
@@ -271,7 +282,7 @@ async def share_page(request: Request, token: str):
     name = meta.get("name", "")
     can_upload = share.get("mode") == "upload"
     files = [f for f in private_files() if f.get("folder") == share["folder_id"]]
-    base = str(request.base_url).rstrip("/")
+    base = base_url(request)
     if not wants_html(request):
         lines = [f"Shared folder: {name}", f"mode: {share['mode']}", f"files: {len(files)}", ""]
         for f in files:
@@ -356,14 +367,21 @@ async def merge_chunks(request: Request, payload: MergePayload):
         folders = get_private_folders()
         if folder_id not in folders:
             raise HTTPException(404, "Folder not found")
-    fid = str(uuid.uuid4())
-    _, ext = os.path.splitext(payload.filename)
-    final_path = os.path.join(settings.upload_dir, fid + ext)
     cdir = os.path.join(settings.tmp_dir, f"priv_{payload.upload_id}")
-    assemble_chunks(cdir, final_path, payload.total_chunks, None)
-    with open(os.path.join(settings.upload_dir, fid + ".json"), "w", encoding="utf-8") as f:
-        json.dump({"filename": payload.filename, "ext": ext, "folder": folder_id}, f)
-    return {"success": True, "file_id": fid}
+    fid, written = assemble_chunks(cdir, payload.total_chunks, None)
+    _, ext = os.path.splitext(payload.filename)
+    save_entry(
+        settings.upload_dir,
+        fid,
+        {
+            "filename": payload.filename,
+            "ext": ext,
+            "folder": folder_id,
+            "content_type": mimetypes.guess_type(payload.filename)[0] or "application/octet-stream",
+            "size": written,
+        },
+    )
+    return {"success": True, "file_id": fid, "size_bytes": written}
 
 
 @router.get("/api/files")
@@ -375,7 +393,7 @@ async def api_files(request: Request):
     files = private_files()
     if not wants_html(request):
         return {"files": files}
-    base = str(request.base_url).rstrip("/")
+    base = base_url(request)
     return HTMLResponse(
         page(
             "私人檔案",
@@ -392,24 +410,20 @@ async def api_files(request: Request):
 
 @router.get("/dl/{file_id}")
 async def download(request: Request, file_id: str, preview: bool = False):
-    jp = os.path.join(settings.upload_dir, file_id + ".json")
-    if not os.path.exists(jp):
+    meta = entry_meta(settings.upload_dir, file_id)
+    if meta is None:
         raise HTTPException(404)
-    with open(jp, encoding="utf-8") as f:
-        meta = json.load(f)
-    path = os.path.join(settings.upload_dir, file_id + meta.get("ext", ""))
-    ctype = mimetypes.guess_type(meta.get("filename", ""))[0] if preview else None
+    path = payload_path(file_id, settings.upload_dir, meta.get("ext", ""))
+    ctype = meta.get("content_type") or mimetypes.guess_type(meta.get("filename", ""))[0] if preview else None
     return stream_download(request, path, meta["filename"], inline=preview, content_type=ctype)
 
 
 @router.get("/view/{file_id}")
 async def view_file(file_id: str):
-    jp = os.path.join(settings.upload_dir, file_id + ".json")
-    if not os.path.exists(jp):
+    meta = entry_meta(settings.upload_dir, file_id)
+    if meta is None:
         raise HTTPException(404)
-    with open(jp, encoding="utf-8") as f:
-        meta = json.load(f)
-    path = os.path.join(settings.upload_dir, file_id + meta.get("ext", ""))
+    path = payload_path(file_id, settings.upload_dir, meta.get("ext", ""))
     if not os.path.exists(path):
         raise HTTPException(404)
     return FileResponse(path, filename=meta["filename"])
@@ -421,14 +435,7 @@ async def delete_file(request: Request, file_id: str):
         if wants_html(request):
             return RedirectResponse(url="/login", status_code=303)
         return JSONResponse(status_code=401, content={"error": "unauthorized"})
-    jp = os.path.join(settings.upload_dir, file_id + ".json")
-    if os.path.exists(jp):
-        with open(jp, encoding="utf-8") as f:
-            meta = json.load(f)
-        p = os.path.join(settings.upload_dir, file_id + meta.get("ext", ""))
-        if os.path.exists(p):
-            os.remove(p)
-        os.remove(jp)
+    delete_file_entry(settings.upload_dir, file_id)
     if wants_html(request):
         return RedirectResponse(url="/", status_code=303)
     return {"success": True}

@@ -16,12 +16,13 @@ from ..config import settings
 from ..negotiation import wants_html
 from ..storage import get_private_folders, get_shares, private_files, public_folder_files, public_folder_name
 from ..ui import file_rows, page, private_panel, public_upload_form
+from ..urls import base_url
 
 router = APIRouter()
 
 
 def _dashboard_html(request: Request, authed: bool) -> str:
-    base = str(request.base_url).rstrip("/")
+    base = base_url(request)
     if authed:
         files = private_files()
         return page(
@@ -69,7 +70,7 @@ def _dashboard_html(request: Request, authed: bool) -> str:
 
 
 def _index_text(request: Request, authed: bool) -> str:
-    base = str(request.base_url).rstrip("/")
+    base = base_url(request)
     files = private_files() if authed else []
     lines = [
         "CaveMan Drop",
@@ -84,7 +85,7 @@ def _index_text(request: Request, authed: bool) -> str:
         f"  POST {base}/api/public/folder",
         "    Create a public folder and receive its URLs.",
         f"  POST {base}/api/public/upload",
-        "    Upload a file. Send multipart/form-data field 'file'. Optional form field 'folder' adds it to an existing folder.",
+        "    Upload a file. Send multipart/form-data field 'file'. Optional form field 'folder' is an existing folder_id, or free text to name a new folder.",
         f"  GET {base}/api/public/folder/<folder_id>",
         "    Return folder metadata, files, and download URLs.",
         f"  GET {base}/api/public/file/<folder_id>/<file_id>",
@@ -193,14 +194,10 @@ def _upload_html() -> str:
             {public_upload_form()}
           </mdui-card>
           <mdui-card variant="outlined" class="card-pad">
-            <h2>或先建立空資料夾</h2>
-            <p>先建資料夾，再把連結分享給別人一起上傳。</p>
-            <mdui-button data-create-folder>建立空資料夾</mdui-button>
-          </mdui-card>
-          <mdui-card variant="outlined" class="card-pad">
             <h2>curl 用法</h2>
             <pre class="curl">curl -F file=@example.bin /api/public/upload
-curl -F file=@example.bin -F folder=FOLDER_ID /api/public/upload</pre>
+curl -F file=@example.bin -F folder=FOLDER_ID /api/public/upload
+curl -F file=@example.bin -F folder=我的資料夾 /api/public/upload</pre>
           </mdui-card>
         </div>""",
         active="upload",
@@ -208,7 +205,7 @@ curl -F file=@example.bin -F folder=FOLDER_ID /api/public/upload</pre>
 
 
 def _upload_text(request: Request) -> str:
-    base = str(request.base_url).rstrip("/")
+    base = base_url(request)
     return (
         "CaveMan Drop public upload\n\n"
         "No account is required.\n\n"
@@ -224,7 +221,8 @@ def _upload_text(request: Request) -> str:
         "Create an empty folder:\n"
         f"  curl -X POST {base}/api/public/folder\n\n"
         "Add a file to an existing folder:\n"
-        f"  curl -F file=@example.bin -F folder=FOLDER_ID {base}/api/public/upload\n\n"
+        f"  curl -F file=@example.bin -F folder=FOLDER_ID {base}/api/public/upload\n"
+        "  (`folder` also takes free text: a name creates a new folder with that name)\n\n"
         f"Machine-readable API documentation: {base}/llms.txt"
     )
 
@@ -248,7 +246,7 @@ def _folder_html(request: Request, folder_id: str) -> HTMLResponse | None:
 
     if not _os.path.isdir(public_folder_dir(folder_id)):
         return None
-    base = str(request.base_url).rstrip("/")
+    base = base_url(request)
     authed = bool(request.session.get("auth"))
     files = public_folder_files(folder_id)
     for f in files:
@@ -296,7 +294,7 @@ def _folder_text(request: Request, folder_id: str) -> PlainTextResponse:
 
     if not _os.path.isdir(public_folder_dir(folder_id)):
         return PlainTextResponse("Folder not found.", status_code=404)
-    base = str(request.base_url).rstrip("/")
+    base = base_url(request)
     files = public_folder_files(folder_id)
     lines = [
         "CaveMan Drop public folder",

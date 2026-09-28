@@ -39,7 +39,8 @@ app/
   __init__.py        # FastAPI 工廠、中介層、錯誤頁
   config.py          # .env 設定（連接埠、密碼、限制、目錄）
   negotiation.py     # 瀏覽器 vs 程式的內容協商
-  storage.py         # 檔案儲存、配額、速率限制、下載
+  storage.py         # 檔案儲存、配額、速率限制、下載、sha256 bin
+  urls.py            # 反向代理後仍正確的基底網址（https 進 → https 出）
   ui.py              # 全站共用 MDUI v2 繁中 HTML 外殼
   static/            # app.css + app.js（/static 提供）
   routes/
@@ -58,9 +59,11 @@ docs/                # /docs 的 Markdown 來源（GitHub 上也可直接閱讀�
 | 變數 | 預設 | 用途 |
 |---|---|---|
 | `PORT`（`SERVER_PORT` 也可） | `20042` | 監聽連接埠 |
+| `PUBLIC_BASE_URL` | 空 | 產生連結時的固定基底網址；留空＝跟著請求走 |
 | `PASSWORD` | `passw` | 私人後台密碼——**務必修改** |
 | `SECRET_KEY` | 自動產生 | Session 簽名（存於 `.secret_key`） |
 | `UPLOAD_DIR` / `TMP_DIR` / `PUBLIC_DIR` | `airdrop_files` / `airdrop_tmp` / `public_uploads` | 儲存目錄 |
+| `BIN_DIR` | `bin` | sha256 位元組庫（同一份內容只存一次） |
 | `MAX_FILE_SIZE_GB` | `5` | 公開單檔上限（登入後無上限） |
 | `RATE_LIMIT_MAX_UPLOADS` / `RATE_LIMIT_WINDOW_SECONDS` | `30` / `3600` | 單 IP 上傳頻率限制 |
 | `BW_WINDOW_SECONDS` | `600` | 頻寬統計視窗（秒），到期重算 |
@@ -71,6 +74,20 @@ docs/                # /docs 的 Markdown 來源（GitHub 上也可直接閱讀�
 
 用戶端 IP 從 `CF-Connecting-IP` → `X-Forwarded-For` → 連線位址依序取得，
 Cloudflare 後面也能正確限速。登入 session 不限速。
+
+產生的連結走 `app/urls.py`：HTTPS 進來就回 HTTPS（讀 `Forwarded` /
+`X-Forwarded-Proto` / `X-Forwarded-Host`），代理沒帶標頭就設
+`PUBLIC_BASE_URL` 強制指定網域。這兩個標頭會被信任，所以直連後端埠時
+請防火牆擋住，或直接用 `PUBLIC_BASE_URL` 釘死網域。
+
+公開上傳的 `folder` 欄位吃兩種東西：既有資料夾 id，或任意文字（自動開一個
+以它為名字的新資料夾並上傳進去）。要「只建資料夾、不傳檔」就
+`POST /api/public/folder {"name": "..."}`，或網頁的「建立資料夾」分頁。
+
+檔案 id 就是內容的 sha256：`file_id` 相同代表位元組完全相同。位元組只存一份
+在 `BIN_DIR`（預設 `bin/`），所以同一個檔案傳十次還是只有一份，連結也一樣。
+資料夾 / 單檔目錄裡只放 `<file_id>.json`（檔名、型別、大小、所属資料夾）。
+刪掉最後一個引用時才會真的刪位元組。舊的 UUID 檔案 id 仍可下載。
 
 ## 文件
 

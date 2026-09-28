@@ -64,10 +64,18 @@ class Settings:
     password: str = field(default_factory=lambda: os.getenv("PASSWORD", "passw"))
     secret_key: str = field(default_factory=_get_or_create_secret)
     mobile_token: str = field(default_factory=_get_or_create_mobile_token)
+    # Absolute base for generated links. Empty = derive from the request, honouring
+    # Forwarded / X-Forwarded-Proto (see app.urls).
+    public_base_url: str = field(
+        default_factory=lambda: os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
+    )
     upload_dir: str = field(default_factory=lambda: os.getenv("UPLOAD_DIR", "airdrop_files"))
     tmp_dir: str = field(default_factory=lambda: os.getenv("TMP_DIR", "airdrop_tmp"))
     public_dir: str = field(default_factory=lambda: os.getenv("PUBLIC_DIR", "public_uploads"))
     single_dir: str = field(default_factory=lambda: os.getenv("SINGLE_DIR", "public_singles"))
+    # Content-addressed blob store: one copy of each sha256, shared by every
+    # folder/single that links the same bytes.
+    bin_dir: str = field(default_factory=lambda: os.getenv("BIN_DIR", "bin"))
     max_file_size: int = field(
         default_factory=lambda: _int("MAX_FILE_SIZE_GB", 5) * 1024**3
     )
@@ -109,7 +117,7 @@ class Settings:
                 self.port = int(os.getenv("SERVER_PORT", str(self.port)))
             except ValueError:
                 pass
-        for d in (self.upload_dir, self.tmp_dir, self.public_dir, self.single_dir):
+        for d in (self.upload_dir, self.tmp_dir, self.public_dir, self.single_dir, self.bin_dir):
             os.makedirs(d, exist_ok=True)
 
 

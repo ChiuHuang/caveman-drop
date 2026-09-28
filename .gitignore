@@ -8,5 +8,6 @@ airdrop_files/
 airdrop_tmp/
 public_uploads/
 public_singles/
+bin/
 mobile_token.txt
 *.log

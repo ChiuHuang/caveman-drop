@@ -1,6 +1,9 @@
 """Smoke test: browser HTML vs agent text/JSON, upload flows, private mode."""
 import os
+import sys
 import uuid
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from fastapi.testclient import TestClient
 from app import app
@@ -46,7 +49,13 @@ print("curl /docs/api OK")
 
 # --- single upload: direct link, NO folder created ---
 import glob as _glob
+import hashlib
+from app.storage import bin_path
+
 _before = set(_glob.glob("public_uploads/*"))
+_want = hashlib.sha256(b"hi caveman").hexdigest()
+if os.path.exists(bin_path(_want)):  # start from a clean bin for this content
+    os.remove(bin_path(_want))
 f = c.post("/api/public/upload", headers=J, files={"file": ("hello.txt", b"hi caveman")})
 assert f.status_code == 200
 assert "folder_id" not in f.json() and "folder_url" not in f.json()
@@ -61,6 +70,21 @@ assert m.json()["filename"] == "hello.txt"
 p = c.get(f"/dl/s/{fid}?preview=1", headers=J)
 assert "inline" in p.headers["content-disposition"]
 print("single download + metadata OK")
+
+# --- content addressing: file_id is the sha256, same bytes = one stored copy ---
+assert fid == _want, (fid, _want)
+assert not f.json()["deduplicated"], "first copy must actually be stored"
+f_again = c.post("/api/public/upload", headers=J, files={"file": ("hello.txt", b"hi caveman")})
+assert f_again.json()["file_id"] == fid, "same content must reuse the same id"
+assert f_again.json()["deduplicated"] is True
+assert c.get(f"/dl/s/{fid}", headers=J).content == b"hi caveman"
+# same bytes, different name + a folder: still one blob, two entries
+f3 = c.post("/api/public/upload", headers=J, files={"file": ("copy.txt", b"hi caveman")}, data={"folder": "去重"})
+dup = f3.json()["file_id"]
+assert dup == fid and f3.json()["deduplicated"] is True and f3.json()["folder_id"]
+assert os.path.exists(bin_path(fid))
+assert len([n for n in os.listdir(os.path.dirname(bin_path(fid))) if n == fid]) == 1
+print("sha256 ids + bin dedupe OK")
 
 # --- folder flow: explicit create with name, then join ---
 cf = c.post("/api/public/folder", headers=J, json={"name": "派對"})
@@ -100,6 +124,7 @@ m = c.post("/api/public/merge_chunks", headers=J,
 assert m.status_code == 200 and m.json()["size_bytes"] == 1001
 assert "folder_id" not in m.json(), "chunked merge without folder must stay single"
 pfid = m.json()["file_id"]
+assert pfid == hashlib.sha256(pblob + b"z").hexdigest(), "merged file_id must be the content sha256"
 d = c.get(f"/dl/s/{pfid}", headers=J)
 assert d.content == pblob + b"z"
 print("public chunked upload+merge OK")
@@ -135,12 +160,86 @@ import shutil
 shutil.rmtree(f"airdrop_tmp/pub_{big_uid}", ignore_errors=True)
 print("high chunk index OK")
 
+# --- scheme follows the request: https in -> https links out ---
+r = c.get("/api", headers=J)
+assert r.json()["endpoints"]["download"]["url"].startswith("http://testserver"), r.json()["endpoints"]["download"]["url"]
+fwd = {**J, "X-Forwarded-Proto": "https", "X-Forwarded-Host": "file.chiuhuang.dev"}
+r = c.get("/api", headers=fwd)
+assert r.json()["endpoints"]["single_download"]["url"] == "https://file.chiuhuang.dev/dl/s/{file_id}", r.json()["endpoints"]["single_download"]["url"]
+r = c.get("/llms.txt", headers=fwd)
+assert "https://file.chiuhuang.dev/api/public/upload" in r.text
+r = c.post("/api/public/upload", headers=fwd, files={"file": ("s.txt", b"secure")})
+assert r.json()["download_url"].startswith("https://file.chiuhuang.dev/dl/s/")
+r = c.post("/api/public/folder", headers=fwd, json={"name": "派對2"})
+assert r.json()["folder_url"].startswith("https://file.chiuhuang.dev/f/")
+r = c.get(f"/f/{folder}", headers={**B, "X-Forwarded-Proto": "https", "X-Forwarded-Host": "file.chiuhuang.dev"})
+assert f'data-copy="https://file.chiuhuang.dev/f/{folder}"' in r.text
+assert "http://" not in r.text
+r = c.post("/api/public/upload", headers=J, files={"file": ("f.txt", b"fwd")})
+assert r.json()["download_url"].startswith("http://testserver/"), "plain http request must stay http"
+print("https/http base_url OK")
+
+from app.config import settings as _cfg
+_old_base = _cfg.public_base_url
+_cfg.public_base_url = "https://fixed.example.com"
+try:
+    r = c.get("/api", headers={**J, "X-Forwarded-Proto": "https", "X-Forwarded-Host": "evil.test"})
+    assert r.json()["endpoints"]["upload"]["url"] == "https://fixed.example.com/api/public/upload"
+finally:
+    _cfg.public_base_url = _old_base
+print("PUBLIC_BASE_URL override OK")
+
+# --- forwarded header edge cases (app.urls) ---
+from starlette.requests import Request as _Request
+from app.urls import base_url as _base_url
+
+
+def _fake_request(headers):
+    hdrs = [(k.lower().encode(), v.encode()) for k, v in headers.items()]
+    return _Request({"type": "http", "http_version": "1.1", "method": "GET", "scheme": "http",
+                     "path": "/", "raw_path": b"/", "query_string": b"", "root_path": "",
+                     "headers": hdrs, "client": ("127.0.0.1", 1), "server": ("127.0.0.1", 20042)})
+
+
+assert _base_url(_fake_request({"host": "a.test"})) == "http://a.test"
+assert _base_url(_fake_request({"host": "a.test", "x-forwarded-proto": "https, http"})) == "https://a.test"
+assert _base_url(_fake_request({"host": "a.test", "x-forwarded-ssl": "on"})) == "https://a.test"
+assert _base_url(_fake_request({"host": "a.test", "forwarded": "proto=https;host=cdn.test"})) == "https://cdn.test"
+assert _base_url(_fake_request({"host": "a.test", "x-forwarded-proto": "gopher"})) == "http://a.test"
+assert _base_url(_fake_request({"host": "a.test", "x-forwarded-host": "evil.test/p"})) == "http://a.test"
+print("forwarded header edge cases OK")
+
+# --- folder field accepts an id OR a free-text name ---
+byname = c.post("/api/public/upload", headers=J, files={"file": ("n.txt", b"named")}, data={"folder": "我的相簿"})
+assert byname.status_code == 200, byname.text
+assert byname.json()["folder_name"] == "我的相簿"
+named_folder = byname.json()["folder_id"]
+g = c.get(f"/api/public/folder/{named_folder}", headers=J)
+assert [f["name"] for f in g.json()["files"]] == ["n.txt"]
+h = c.get(f"/f/{named_folder}", headers=B)
+assert "我的相簿" in h.text
+nuid = str(uuid.uuid4())
+c.post("/api/public/chunk", headers=J, files={"file_chunk": ("c", b"chunked-name")},
+       data={"upload_id": nuid, "index": "0", "filename": "cn.txt"})
+mn = c.post("/api/public/merge_chunks", headers=J,
+            json={"upload_id": nuid, "filename": "cn.txt", "total_chunks": 1, "folder": "合併資料夾"})
+assert mn.json()["folder_name"] == "合併資料夾" and mn.json()["folder_url"].startswith("http://testserver/f/")
+print("folder name as text OK")
+
 # --- 1MB probe tags the real IP with a thread count ---
 probe_body = b"p" * (1024 * 1024)
 pr = c.post("/api/public/probe", headers={**J, "CF-Connecting-IP": "5.6.7.8"},
             files={"probe": ("probe.bin", probe_body)})
 assert pr.status_code == 200, pr.text
 assert pr.json()["you"] == "5.6.7.8" and pr.json()["threads"] == 16
+# a client that measured 1s for the probe is slow -> more threads
+slow = c.post("/api/public/probe", headers={**J, "CF-Connecting-IP": "5.6.7.9"},
+              files={"probe": ("probe.bin", probe_body)}, data={"ms": "1000"})
+assert slow.json()["threads"] == 128 and abs(slow.json()["mbps"] - 8.39) < 0.01, slow.json()
+# bogus client timing is ignored, server-side timing used instead
+bogus = c.post("/api/public/probe", headers={**J, "CF-Connecting-IP": "5.6.7.10"},
+               files={"probe": ("probe.bin", probe_body)}, data={"ms": "abc"})
+assert bogus.json()["threads"] == 16
 rr = c.post("/api/public/chunk", headers={**J, "CF-Connecting-IP": "5.6.7.8"},
             files={"file_chunk": ("c", b"z")},
             data={"upload_id": str(uuid.uuid4()), "index": "0", "filename": "t.bin"})
@@ -260,22 +359,39 @@ v = c.get(f"/view/{priv_id}", headers=J)
 assert v.status_code == 200
 print("preview view OK")
 
+# --- private uncapped assemble + sha256 id OK (already printed above) ---
 # --- private merge uncapped: tiny cap rejects, None assembles ---
 import tempfile
 from fastapi import HTTPException
-from app.storage import assemble_chunks
+from app.storage import assemble_chunks, bin_path
 tmp = tempfile.mkdtemp()
 os.makedirs(f"{tmp}/parts", exist_ok=True)
 open(f"{tmp}/parts/part_0", "wb").write(b"0123456789")
 try:
-    assemble_chunks(f"{tmp}/parts", f"{tmp}/out", 1, 5)
+    assemble_chunks(f"{tmp}/parts", 1, 5, staging=tmp)
     raise SystemExit("cap should have rejected")
 except HTTPException as e:
     assert e.status_code == 413
+os.makedirs(f"{tmp}/parts", exist_ok=True)
 open(f"{tmp}/parts/part_0", "wb").write(b"0123456789")
-n = assemble_chunks(f"{tmp}/parts", f"{tmp}/out", 1, None)
+fid10, n = assemble_chunks(f"{tmp}/parts", 1, None, staging=tmp)
 assert n == 10
-print("private uncapped assemble OK")
+assert fid10 == hashlib.sha256(b"0123456789").hexdigest(), fid10
+assert os.path.exists(bin_path(fid10)), "assembled blob must land in the bin store"
+print("private uncapped assemble + sha256 id OK")
+
+# --- legacy UUID file ids still resolve (old links keep working) ---
+legacy_id = str(uuid.uuid4())
+open(os.path.join("airdrop_files", legacy_id + ".txt"), "wb").write(b"legacy")
+import json as _json
+with open(os.path.join("airdrop_files", legacy_id + ".json"), "w", encoding="utf-8") as f:
+    _json.dump({"filename": "old.txt", "ext": ".txt"}, f)
+ld = c.get(f"/dl/{legacy_id}", headers=J)
+assert ld.status_code == 200 and ld.content == b"legacy", "legacy uuid file id must still serve"
+c.get(f"/del/{legacy_id}", headers=J, follow_redirects=False)  # logged in by now
+assert not os.path.exists(os.path.join("airdrop_files", legacy_id + ".json"))
+assert not os.path.exists(os.path.join("airdrop_files", legacy_id + ".txt"))
+print("legacy uuid ids still work OK")
 
 # --- tmp sweeper: stale chunk dirs removed, fresh kept ---
 import time

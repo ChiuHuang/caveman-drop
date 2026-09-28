@@ -18,15 +18,18 @@
 .file-list { border-radius: 12px; }
 .empty { padding: 20px; text-align: center; opacity: .8; }
 .form-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
-form[data-chunked] .form-row { flex-wrap: nowrap; }
-form[data-chunked] mdui-text-field { flex: 1 1 200px; min-width: 160px; }
-form[data-chunked] input[type="file"] { flex: 0 1 auto; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
-@media (max-width: 640px) { form[data-chunked] .form-row { flex-wrap: wrap; } }
+form[data-chunked] input[type="file"] { flex: 1 1 240px; min-width: 170px; max-width: 100%; }
+form[data-chunked] .form-row > mdui-button { flex: 0 0 auto; }
+.upfield { flex: 1 1 100%; min-width: 0; }
+.upfield mdui-text-field { width: 100%; }
+.up-hint { margin: 2px 0 0; font-size: .78rem; opacity: .65; line-height: 1.5; }
 .result-box { margin-top: 12px; }
 .result-box code { overflow-wrap: anywhere; }
-.rlink { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
-.rlink code { flex: 1 1 auto; min-width: 0; word-break: break-all; font-size: .78rem; line-height: 1.5; }
-.rlink-label { flex: 0 0 auto; font-size: .8rem; opacity: .65; }
+.result-title { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.result-stats { font-size: .82rem; opacity: .7; margin: 2px 0 4px; }
+.rlink { display: flex; gap: 10px; align-items: flex-start; margin: 8px 0; }
+.rlink code { flex: 1 1 0; min-width: 0; word-break: break-all; font-size: .78rem; line-height: 1.5; }
+.rlink-label { flex: 0 0 auto; min-width: 3.6em; font-size: .8rem; opacity: .65; padding-top: 3px; }
 .rlink-btns { flex: 0 0 auto; display: flex; gap: 2px; align-items: center; }
 [data-tabpanel] { padding-top: 4px; }
 mdui-tabs { margin-bottom: 4px; }
@@ -77,6 +80,8 @@ mdui-card { --mdui-shape-corner-medium: 16px; }
 .tp { margin-top: 12px; border-top: 1px solid rgba(127,127,127,.25); padding-top: 12px; }
 .tp-top { display: flex; gap: 12px; align-items: baseline; margin-bottom: 8px; flex-wrap: wrap; }
 .tp-top strong { font-size: 1.1rem; }
+.tpspeed { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 1rem; color: rgb(var(--mdui-color-primary)); }
+.tpspeed:empty { display: none; }
 .tp-note { color: rgb(var(--mdui-color-error)); font-size: .85rem; }
 .tp-seglabel { margin: 10px 0 4px; font-size: .8rem; }
 .segbar { display: flex; gap: 2px; margin-bottom: 12px; }

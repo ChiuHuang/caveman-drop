@@ -2,21 +2,20 @@
 
 POST endpoints always return JSON (browser upload forms use fetch and parse
 JSON). GET endpoints return JSON to agents/curl and an MDUI HTML console to
-browsers. Downloads always stream bytes.
+browsers. Downloads always stream bytes. File ids are the sha256 of the content
+(see app/storage.py), so identical files share one stored copy.
 """
 
 from __future__ import annotations
 
 import html
-import json
 import mimetypes
 import os
 import re
-import time
 from typing import Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from ..config import settings
@@ -24,27 +23,37 @@ from ..negotiation import wants_html
 from ..storage import (
     MAX_CHUNK_BYTES,
     assemble_chunks,
+    bin_path,
     bw_pace,
     bw_record,
     bw_status,
     check_rate_limit,
     chunk_dir,
+    clean_name,
     client_ip,
+    create_public_folder,
+    entry_meta,
     folder_lock,
+    payload_path,
     probe_check,
     public_folder_dir,
     public_folder_files,
     public_folder_name,
+    resolve_public_folder,
+    save_entry,
+    single_blob,
     single_meta,
-    single_path,
+    speed_probe,
+    store_blob,
     stream_download,
     tag_ip,
     tagged_threads,
-    threads_for_speed,
+    validate_file_id,
     validate_public_id,
     validate_upload_id,
 )
 from ..ui import file_rows, fmt_size, page
+from ..urls import base_url
 
 router = APIRouter()
 
@@ -56,26 +65,19 @@ class PublicMergePayload(BaseModel):
     folder: Optional[str] = None
 
 
-@router.post("/api/public/upload")
-async def public_upload(
-    request: Request,
-    file: UploadFile = File(...),
-    folder: Optional[str] = Form(None),
-):
-    """Anonymous upload. No folder = single direct file, no folder created."""
-    ip = client_ip(request)
-    check_rate_limit(ip)
+async def _receive_to_bin(
+    file: UploadFile, ip: str, folder_id: str | None
+) -> tuple[str, int, bool]:
+    """Stream an upload into a temp file, then file it in the bin store by sha256.
 
-    if folder:
-        return await _upload_to_folder(request, ip, file, folder)
-
+    Returns (file_id, bytes, already_stored). Identical bytes always get the same
+    id and reuse the stored blob, so re-uploading a file never writes a second copy.
+    """
+    import hashlib
     import uuid
 
-    fid = str(uuid.uuid4())
-    original_name = os.path.basename(file.filename or "unnamed") or "unnamed"
-    _, ext = os.path.splitext(original_name)
-    ext = ext[:32] if re.fullmatch(r"\.[A-Za-z0-9._-]+", ext or "") else ""
-    dest = single_path(fid, ext)
+    dest = os.path.join(settings.tmp_dir, f"up_{uuid.uuid4()}")
+    digest = hashlib.sha256()
     written = 0
     CHUNK = 1024 * 1024
     try:
@@ -87,12 +89,20 @@ async def public_upload(
                     break
                 written += len(chunk)
                 if written > settings.max_file_size:
-                    raise HTTPException(413, "File exceeds the per-file limit")
+                    raise HTTPException(
+                        413,
+                        f"File exceeds the {settings.max_file_size // 1024**3}GB per-file limit",
+                    )
+                digest.update(chunk)
                 out.write(chunk)
-                bw_record(ip, None, len(chunk))
-                if written - paced_at >= 1024 * 1024:
-                    await bw_pace(ip, written - paced_at, bw_status(ip)["throttle_mbps"])
+                bw_record(ip, folder_id, len(chunk))
+                if written - paced_at >= CHUNK:
+                    await bw_pace(ip, written - paced_at, bw_status(ip, folder_id)["throttle_mbps"])
                     paced_at = written
+        file_id = digest.hexdigest()
+        deduped = os.path.exists(bin_path(file_id))
+        store_blob(dest, file_id)
+        return file_id, written, deduped
     except HTTPException:
         if os.path.exists(dest):
             os.remove(dest)
@@ -100,18 +110,52 @@ async def public_upload(
     finally:
         await file.close()
 
-    content_type = file.content_type or mimetypes.guess_type(original_name)[0] or "application/octet-stream"
-    with open(single_path(fid, ".json"), "w", encoding="utf-8") as f:
-        json.dump({"filename": original_name, "ext": ext, "content_type": content_type, "ctime": time.time()}, f)
 
-    base = str(request.base_url).rstrip("/")
+def _file_meta(original_name: str, size: int) -> dict:
+    _, ext = os.path.splitext(original_name)
+    ext = ext[:32] if re.fullmatch(r"\.[A-Za-z0-9._-]+", ext or "") else ""
+    return {
+        "filename": original_name,
+        "ext": ext,
+        "content_type": mimetypes.guess_type(original_name)[0] or "application/octet-stream",
+        "size": size,
+    }
+
+
+@router.post("/api/public/upload")
+async def public_upload(
+    request: Request,
+    file: UploadFile = File(...),
+    folder: Optional[str] = Form(None),
+):
+    """Anonymous upload. No folder = single direct file, no folder created.
+
+    `file_id` is the sha256 of the content, so the same file always gets the same
+    id and link. `folder` accepts an existing folder id or a free-text name
+    (which creates a new folder named after it).
+    """
+    ip = client_ip(request)
+    check_rate_limit(ip)
+
+    if folder:
+        return await _upload_to_folder(request, ip, file, resolve_public_folder(folder))
+
+    original_name = os.path.basename(file.filename or "unnamed") or "unnamed"
+    meta = _file_meta(original_name, 0)
+    fid, written, deduped = await _receive_to_bin(file, ip, None)
+    meta["size"] = written
+    meta["content_type"] = file.content_type or meta["content_type"]
+    save_entry(settings.single_dir, fid, meta)
+
+    base = base_url(request)
     download_url = f"{base}/dl/s/{fid}"
     return {
         "success": True,
         "file_id": fid,
         "filename": original_name,
         "size_bytes": written,
-        "content_type": content_type,
+        "content_type": meta["content_type"],
+        "deduplicated": deduped,
         "url": download_url,
         "download_url": download_url,
         "file_api_url": f"{base}/api/public/single/{fid}",
@@ -134,67 +178,25 @@ async def _upload_to_folder(request: Request, ip: str, file: UploadFile, folder:
                 f"File exceeds the {settings.max_file_size // 1024**3}GB per-file limit",
             )
 
-        import uuid
-
-        fid = str(uuid.uuid4())
         original_name = os.path.basename(file.filename or "unnamed") or "unnamed"
-        _, ext = os.path.splitext(original_name)
-        ext = ext[:32] if re.fullmatch(r"\.[A-Za-z0-9._-]+", ext or "") else ""
-        dest = os.path.join(fdir, fid + ext)
-        written = 0
-        CHUNK = 1024 * 1024
+        meta = _file_meta(original_name, 0)
+        fid, written, deduped = await _receive_to_bin(file, ip, folder_id)
+        meta["size"] = written
+        meta["content_type"] = file.content_type or meta["content_type"]
+        save_entry(fdir, fid, meta)
 
-        try:
-            with open(dest, "wb") as out:
-                paced_at = 0
-                while True:
-                    chunk = await file.read(CHUNK)
-                    if not chunk:
-                        break
-                    written += len(chunk)
-                    if written > settings.max_file_size:
-                        raise HTTPException(
-                            413,
-                            f"File exceeds the {settings.max_file_size // 1024**3}GB per-file limit",
-                        )
-                    out.write(chunk)
-                    bw_record(ip, folder_id, len(chunk))
-                    if written - paced_at >= 1024 * 1024:
-                        await bw_pace(ip, written - paced_at, bw_status(ip, folder_id)["throttle_mbps"])
-                        paced_at = written
-        except HTTPException:
-            if os.path.exists(dest):
-                os.remove(dest)
-            raise
-        finally:
-            await file.close()
-
-        content_type = (
-            file.content_type
-            or mimetypes.guess_type(original_name)[0]
-            or "application/octet-stream"
-        )
-        with open(os.path.join(fdir, fid + ".json"), "w", encoding="utf-8") as f:
-            json.dump(
-                {
-                    "filename": original_name,
-                    "ext": ext,
-                    "content_type": content_type,
-                    "ctime": time.time(),
-                },
-                f,
-            )
-
-    base = str(request.base_url).rstrip("/")
+    base = base_url(request)
     download_url = f"{base}/dl/pub/{folder_id}/{fid}"
     folder_url = f"{base}/f/{folder_id}"
     return {
         "success": True,
         "folder_id": folder_id,
+        "folder_name": public_folder_name(folder_id),
         "file_id": fid,
         "filename": original_name,
         "size_bytes": written,
-        "content_type": content_type,
+        "content_type": meta["content_type"],
+        "deduplicated": deduped,
         "url": download_url,
         "download_url": download_url,
         "folder_url": folder_url,
@@ -206,27 +208,20 @@ async def _upload_to_folder(request: Request, ip: str, file: UploadFile, folder:
 
 @router.post("/api/public/folder")
 async def public_create_folder(request: Request):
-    """Create an empty public folder and return share/upload/API URLs."""
-    import time as _time
-    import uuid
-
+    """Create an empty public folder under a free-text name and return its URLs."""
     name = ""
     try:
         body = await request.json()
         if isinstance(body, dict):
-            name = str(body.get("name", "") or "")[:64].strip()
+            name = clean_name(str(body.get("name", "") or ""))
     except Exception:
         pass
-    folder_id = str(uuid.uuid4())
-    fdir = public_folder_dir(folder_id)
-    os.makedirs(fdir, exist_ok=True)
-    with open(os.path.join(fdir, "folder.json"), "w", encoding="utf-8") as f:
-        json.dump({"name": name, "ctime": _time.time()}, f, ensure_ascii=False)
-    base = str(request.base_url).rstrip("/")
+    folder_id, meta = create_public_folder(name)
+    base = base_url(request)
     return {
         "success": True,
         "folder_id": folder_id,
-        "folder_name": name,
+        "folder_name": meta["name"],
         "folder_url": f"{base}/f/{folder_id}",
         "upload_url": f"{base}/f/{folder_id}",
         "folder_api_url": f"{base}/api/public/folder/{folder_id}",
@@ -262,42 +257,31 @@ async def public_chunk(
 
 @router.post("/api/public/merge_chunks")
 async def public_merge_chunks(request: Request, payload: PublicMergePayload):
-    """Assemble a public chunked upload. No folder = single direct file."""
+    """Assemble a public chunked upload. No folder = single direct file.
+
+    `folder` is an existing folder id or a free-text name for a new folder.
+    """
     ip = client_ip(request)
     check_rate_limit(ip)
     validate_upload_id(payload.upload_id)
 
-    import uuid
-
-    fid = str(uuid.uuid4())
     original_name = os.path.basename(payload.filename or "unnamed") or "unnamed"
     _, ext = os.path.splitext(original_name)
     ext = ext[:32] if re.fullmatch(r"\.[A-Za-z0-9._-]+", ext or "") else ""
     cdir = os.path.join(settings.tmp_dir, f"pub_{payload.upload_id}")
     content_type = mimetypes.guess_type(original_name)[0] or "application/octet-stream"
-    base = str(request.base_url).rstrip("/")
+    base = base_url(request)
+    entry = {"filename": original_name, "ext": ext, "content_type": content_type}
 
     if payload.folder:
-        folder_id = payload.folder
+        folder_id = resolve_public_folder(payload.folder)
         validate_public_id(folder_id, "folder id")
         fdir = public_folder_dir(folder_id)
         if not os.path.isdir(fdir):
             raise HTTPException(404, "Folder not found")
         async with folder_lock(folder_id):
-            dest = os.path.join(fdir, fid + ext)
-            written = assemble_chunks(cdir, dest, payload.total_chunks, settings.max_file_size)
-            if written > settings.max_file_size:
-                raise HTTPException(413, "File exceeds the per-file limit")
-            with open(os.path.join(fdir, fid + ".json"), "w", encoding="utf-8") as f:
-                json.dump(
-                    {
-                        "filename": original_name,
-                        "ext": ext,
-                        "content_type": content_type,
-                        "ctime": time.time(),
-                    },
-                    f,
-                )
+            fid, written = assemble_chunks(cdir, payload.total_chunks, settings.max_file_size)
+            save_entry(fdir, fid, {**entry, "size": written})
             bw_record(ip, folder_id, written)
         download_url = f"{base}/dl/pub/{folder_id}/{fid}"
         folder_url = f"{base}/f/{folder_id}"
@@ -317,20 +301,8 @@ async def public_merge_chunks(request: Request, payload: PublicMergePayload):
             "file_api_url": f"{base}/api/public/file/{folder_id}/{fid}",
         }
 
-    dest = single_path(fid, ext)
-    written = assemble_chunks(cdir, dest, payload.total_chunks, settings.max_file_size)
-    if written > settings.max_file_size:
-        raise HTTPException(413, "File exceeds the per-file limit")
-    with open(single_path(fid, ".json"), "w", encoding="utf-8") as f:
-        json.dump(
-            {
-                "filename": original_name,
-                "ext": ext,
-                "content_type": content_type,
-                "ctime": time.time(),
-            },
-            f,
-        )
+    fid, written = assemble_chunks(cdir, payload.total_chunks, settings.max_file_size)
+    save_entry(settings.single_dir, fid, {**entry, "size": written})
     bw_record(ip, None, written)
     download_url = f"{base}/dl/s/{fid}"
     return {
@@ -352,14 +324,11 @@ async def public_single_api(request: Request, file_id: str):
         meta = single_meta(file_id)
     except HTTPException:
         raise HTTPException(404, "File not found")
-    path = single_path(file_id, meta.get("ext", ""))
-    if not os.path.exists(path):
-        raise HTTPException(404, "File not found")
-    base = str(request.base_url).rstrip("/")
+    base = base_url(request)
     payload = {
         "file_id": file_id,
         "filename": meta.get("filename", file_id),
-        "size_bytes": os.path.getsize(path),
+        "size_bytes": meta["size"],
         "content_type": meta.get("content_type", "application/octet-stream"),
         "download_url": f"{base}/dl/s/{file_id}",
         "url": f"{base}/dl/s/{file_id}",
@@ -390,49 +359,38 @@ async def public_single_download(request: Request, file_id: str, preview: bool =
         meta = single_meta(file_id)
     except HTTPException:
         raise HTTPException(404)
-    path = single_path(file_id, meta.get("ext", ""))
+    path = single_blob(file_id, meta.get("ext", ""))
     ctype = meta.get("content_type") if preview else None
     return stream_download(request, path, meta.get("filename", file_id), inline=preview, content_type=ctype)
 
 
 @router.post("/api/public/probe")
-async def public_probe(request: Request, probe: UploadFile = File(...)):
-    """1MB speed probe: returns the thread count this IP should use."""
-    import time as _time
-
+async def public_probe(request: Request, probe: UploadFile = File(...), ms: Optional[str] = Form(None)):
+    """Speed probe: returns the thread count this IP should use."""
     ip = client_ip(request)
     probe_check(ip)
     data = await probe.read()
     await probe.close()
-    if len(data) > 2 * 1024 * 1024:
+    if len(data) > 8 * 1024 * 1024:
         raise HTTPException(413, "Probe too large")
-    elapsed = max(_time.time() - getattr(request.state, "t0", _time.time()), 0.001)
-    threads = threads_for_speed(len(data) / elapsed)
+    threads, bps = speed_probe(len(data), request, ms)
     tag_ip(ip, threads)
-    return {"threads": threads, "you": ip}
+    return {"threads": threads, "mbps": round(bps * 8 / 1_000_000, 2), "you": ip}
 
 
 @router.get("/api/public/file/{folder_id}/{file_id}")
 async def public_file_api(request: Request, folder_id: str, file_id: str):
     """Metadata + direct URL for one public file (HTML console for browsers)."""
     fdir = public_folder_dir(folder_id)
-    jp = os.path.join(fdir, file_id + ".json")
-    if not os.path.exists(jp):
+    meta = entry_meta(fdir, file_id)
+    if meta is None:
         raise HTTPException(404, "File not found")
-    try:
-        with open(jp, encoding="utf-8") as f:
-            meta = json.load(f)
-    except Exception:
-        raise HTTPException(404, "File metadata is invalid")
-    path = os.path.join(fdir, file_id + meta.get("ext", ""))
-    if not os.path.exists(path):
-        raise HTTPException(404, "File not found")
-    base = str(request.base_url).rstrip("/")
+    base = base_url(request)
     payload = {
         "folder_id": folder_id,
         "file_id": file_id,
         "filename": meta.get("filename", file_id),
-        "size_bytes": os.path.getsize(path),
+        "size_bytes": meta["size"],
         "content_type": meta.get("content_type", "application/octet-stream"),
         "download_url": f"{base}/dl/pub/{folder_id}/{file_id}",
         "url": f"{base}/dl/pub/{folder_id}/{file_id}",
@@ -468,7 +426,7 @@ async def public_folder_api(request: Request, folder_id: str):
     fdir = public_folder_dir(folder_id)
     if not os.path.isdir(fdir):
         raise HTTPException(404, "Folder not found")
-    base = str(request.base_url).rstrip("/")
+    base = base_url(request)
     files = public_folder_files(folder_id)
     for f in files:
         f["download_url"] = f"{base}/dl/pub/{folder_id}/{f['id']}"
@@ -506,13 +464,11 @@ async def public_folder_api(request: Request, folder_id: str):
 
 @router.get("/dl/pub/{folder_id}/{file_id}")
 async def public_download(request: Request, folder_id: str, file_id: str, preview: bool = False):
-    validate_public_id(file_id, "file id")
+    validate_file_id(file_id)
     fdir = public_folder_dir(folder_id)
-    jp = os.path.join(fdir, file_id + ".json")
-    if not os.path.exists(jp):
+    meta = entry_meta(fdir, file_id)
+    if meta is None:
         raise HTTPException(404)
-    with open(jp, encoding="utf-8") as f:
-        meta = json.load(f)
-    path = os.path.join(fdir, file_id + meta.get("ext", ""))
+    path = payload_path(file_id, fdir, meta.get("ext", ""))
     ctype = meta.get("content_type") if preview else None
     return stream_download(request, path, meta["filename"], inline=preview, content_type=ctype)

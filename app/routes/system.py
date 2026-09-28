@@ -8,15 +8,21 @@ from fastapi.responses import HTMLResponse, PlainTextResponse
 from ..config import settings
 from ..negotiation import wants_html
 from ..ui import endpoint_card, page
+from ..urls import base_url
 
 router = APIRouter()
 
 
 def _api_payload(request: Request) -> dict:
-    base = str(request.base_url).rstrip("/")
+    base = base_url(request)
     return {
         "name": "CaveMan Drop public API",
-        "description": "Anonymous file sharing. Upload a file, get a permanent share link back. No auth required.",
+        "description": "Anonymous file sharing. Upload a file, get a permanent share link back. No auth required. file_id is the sha256 of the content, so identical files are stored once.",
+        "storage": {
+            "file_id": "sha256 hex of the file bytes (same content = same id and link)",
+            "blob_store": "bytes are stored once under BIN_DIR (default bin/); re-uploading an identical file reuses that copy",
+            "deduplicated": "true in an upload response when the bytes were already stored",
+        },
         "limits": {
             "max_file_size_bytes": settings.max_file_size,
             "max_file_size_human": f"{settings.max_file_size // 1024**3} GB (public uploads; private uncapped)",
@@ -40,7 +46,7 @@ def _api_payload(request: Request) -> dict:
                 "url": f"{base}/api/public/upload",
                 "form_fields": {
                     "file": "the file to upload (required)",
-                    "folder": "existing folder_id to add this file to (optional — omitted means a single direct file, no folder is created)",
+                    "folder": "existing folder_id to add this file to, or free text to create a new folder with that name (optional — omitted means a single direct file, no folder is created)",
                 },
                 "example_curl": f'curl -F "file=@myfile.txt" {base}/api/public/upload',
             },
@@ -131,22 +137,33 @@ POST {base}/api/public/upload
 Content-Type: multipart/form-data
 Fields:
 - file: required file
-- folder: optional existing folder_id (adds to that folder; omit for a
-  single direct file — no folder is created)
+- folder: optional existing folder_id, or free text to name a new folder
+  (adds to that folder; omit it entirely for a single direct file — no
+  folder is created)
 Returns JSON containing `url` and `download_url` (plus `folder_url` etc.
 only when a folder was used).
 
+`file_id` is the sha256 of the uploaded bytes, so the same content always
+yields the same id and the same link. Identical bytes are stored once in
+the bin directory — re-uploading does not store a second copy and returns
+`"deduplicated": true`.
+
+Generated links follow the request: an HTTPS request gets HTTPS URLs back
+(`Forwarded` / `X-Forwarded-Proto` are honoured).
+
 ## Create an empty public folder
 POST {base}/api/public/folder
-Returns a folder_id plus `folder_url`, `upload_url`, and `folder_api_url`.
+Optional JSON `{{"name": "free text"}}`. Returns a folder_id plus `folder_url`,
+`upload_url`, and `folder_api_url`.
 
 ## Chunked upload (browsers + scripts)
 POST {base}/api/public/chunk (multipart: `file_chunk`, `upload_id` (uuid),
 `index` (0-based), `filename`) — send parts in parallel, then
 POST {base}/api/public/merge_chunks (JSON: `upload_id`, `filename`,
 `total_chunks`, optional `folder`) to assemble. Returns the same payload
-as the single-POST upload. POST 1 MB to /api/public/probe first for a
-speed-based thread recommendation (slow links get 32/64/128).
+as the single-POST upload. POST 2 MB to /api/public/probe first for a
+speed-based thread recommendation (slow links get 32/64/128); send the
+milliseconds your own client measured as `ms` if you can measure it.
 
 ## Single direct files
 GET {base}/api/public/single/{{file_id}} — metadata + direct URL.
@@ -186,7 +203,7 @@ AI agents should prefer the JSON API endpoints above and use the returned `url` 
 @router.get("/api/llms.txt", response_class=PlainTextResponse)
 @router.get("/llms.txt", response_class=PlainTextResponse)
 async def public_llms(request: Request):
-    base = str(request.base_url).rstrip("/")
+    base = base_url(request)
     return LLMS_TEMPLATE.format(
         base=base,
         max_gb=settings.max_file_size // 1024**3,

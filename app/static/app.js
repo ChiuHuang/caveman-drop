@@ -2,6 +2,7 @@
 (function () {
   const THREADS = 16;
   const CHUNK = 4 * 1024 * 1024;
+  const PROBE_BYTES = 2 * 1024 * 1024;
 
   function ready(fn) {
     if (document.readyState !== "loading") fn();
@@ -25,10 +26,51 @@
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   function fmtMB(n) {
-    if (n < 1024) return n + " B";
+    if (!(n > 0)) return "0 B";
+    if (n < 1024) return n.toFixed(0) + " B";
     if (n < 1048576) return (n / 1024).toFixed(1) + " KB";
     if (n < 1073741824) return (n / 1048576).toFixed(1) + " MB";
     return (n / 1073741824).toFixed(2) + " GB";
+  }
+
+  // 連結欄位的值（mdui-text-field 或原生 input 都吃）
+  function fieldValue(root, name) {
+    const el = root.querySelector(`[name="${name}"]`);
+    if (!el) return "";
+    const inner = el.querySelector ? el.querySelector("input,textarea") : null;
+    return String(el.value != null && el.value !== "" ? el.value : inner ? inner.value : "").trim();
+  }
+
+  function fmtDur(s) {
+    if (!(s > 0) || !isFinite(s)) return "";
+    if (s < 60) return Math.round(s) + " 秒";
+    const m = Math.floor(s / 60);
+    return m < 60 ? `${m} 分 ${Math.round(s % 60)} 秒` : `${Math.floor(m / 60)} 小時 ${m % 60} 分`;
+  }
+
+  // 與伺服器 storage.threads_for_speed 同一組門檻
+  function threadsForSpeed(bps) {
+    const MB = 1048576;
+    if (bps > 10 * MB) return 16;
+    if (bps > 5 * MB) return 32;
+    if (bps > 2 * MB) return 64;
+    return 128;
+  }
+
+  const esc = (s) => String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+  function linkRow(label, url, buttons) {
+    return `<div class="rlink"><span class="rlink-label">${esc(label)}</span><code>${esc(url)}</code>` +
+      `<span class="rlink-btns">${buttons}</span></div>`;
+  }
+
+  function resultCard(title, note, stats, rows) {
+    return `<mdui-card variant="filled" class="card-pad result-box">
+      <div class="result-title"><strong>${esc(title)}</strong>${note ? `<span class="muted">${esc(note)}</span>` : ""}</div>
+      ${stats ? `<div class="result-stats">${esc(stats)}</div>` : ""}
+      ${rows.join("")}
+    </mdui-card>`;
   }
 
   // ---- 分段上傳（含線程表 + 分段條 + 測速 + 暫停）----
@@ -38,9 +80,6 @@
     if (!file) { window.toast("請先選擇檔案"); return; }
     const mergeUrl = form.getAttribute("data-merge");
     const isPublic = form.hasAttribute("data-public");
-    const folderInput = form.querySelector('[name="folder"]');
-    const folderIdInput = form.querySelector('[name="folder_id"]');
-    const tokenInput = form.querySelector('[name="token"]');
     const btn = form.querySelector("[type=submit]");
     const panel = form.querySelector("[data-tp]");
     const pct = panel && panel.querySelector("[data-tp-pct]");
@@ -54,27 +93,30 @@
 
     const total = Math.max(1, Math.ceil(file.size / CHUNK));
     const uploadId = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()));
-    // 慢連線加線程：先打 1MB 探針，伺服器按真實 IP 記檔位
+    // 慢連線加線程：先打 2MB 探針。用瀏覽器自己的碼表量（含 DNS/TCP/TLS 與整個來回），
+    // 伺服器只看見「請求進來之後」的時間，會把快線路量成慢線路。
     let threads = Math.min(THREADS, total);
     const probeUrl = form.getAttribute("data-probe");
     if (probeUrl && total > 4) {
       try {
         const pfd = new FormData();
-        pfd.append("probe", new Blob([new Uint8Array(1024 * 1024)]), "probe.bin");
+        pfd.append("probe", new Blob([new Uint8Array(PROBE_BYTES)]), "probe.bin");
+        const t0 = performance.now();
         const pr = await fetch(probeUrl, { method: "POST", body: pfd });
-        if (pr.ok) {
-          const pj = await pr.json();
-          if (pj.threads) threads = Math.max(1, Math.min(128, pj.threads | 0, total));
-        }
+        const bps = (PROBE_BYTES * 1000) / Math.max(performance.now() - t0, 1);
+        if (pr.ok) threads = Math.max(1, Math.min(128, threadsForSpeed(bps), total));
       } catch { /* 探針失敗就用預設 */ }
     }
+    const startedAt = performance.now();
     const state = {
-      next: 0, done: 0, doneBytes: 0, failed: null,
+      next: 0, done: 0, sentBytes: 0, failed: null,
       paused: false, cancelled: false, threads,
     };
 
     if (btn) btn.loading = true;
-    if (panel) panel.hidden = false;
+    if (panel) { panel.hidden = false; panel.__state = state; }
+    if (pauseBtn) { pauseBtn.textContent = "暫停"; }
+    if (panel) panel.classList.remove("paused");
 
     // 線程表：最多顯示 16 列，人多時輪流顯示
     const shown = Math.min(state.threads, 16);
@@ -114,23 +156,45 @@
     };
     render();
 
-    // 測速：每 0.5 秒結算，動畫跟著速度走
-    let lastBytes = 0;
+    // 測速：每 0.25 秒結算，用真正經過的時間（不是假定的間隔）＋平滑
+    let lastAt = startedAt, lastSent = 0, ema = 0;
     const speedTimer = setInterval(() => {
-      const v = (state.doneBytes - lastBytes) * 2;
-      lastBytes = state.doneBytes;
-      if (speed) speed.textContent = state.done >= total ? "完成" : `${fmtMB(v)}/s · ${state.done}/${total} 塊`;
+      const t = performance.now();
+      const dt = Math.max((t - lastAt) / 1000, 0.05);
+      const inst = (state.sentBytes - lastSent) / dt;   // 目前這一瞬間的速率
+      lastAt = t;
+      lastSent = state.sentBytes;
+      ema = ema ? ema + (inst - ema) * 0.4 : inst;
+      if (speed) {
+        if (state.paused) {
+          speed.textContent = "已暫停";
+        } else if (state.done >= total) {
+          const avg = state.sentBytes / Math.max((t - startedAt) / 1000, 0.001);
+          speed.textContent = `完成 · 平均 ${fmtMB(avg)}/s`;
+        } else {
+          const left = ema > 1 ? fmtDur((file.size - state.sentBytes) / ema) : "";
+          speed.textContent =
+            `${fmtMB(ema)}/s · ${fmtMB(state.sentBytes)} / ${fmtMB(file.size)}` +
+            (left ? ` · 剩 ${left}` : "");
+        }
+      }
       if (panel) {
-        const mbs = v / 1048576;
+        const mbs = ema / 1048576;
         panel.style.setProperty("--pulse-dur", mbs > 50 ? ".3s" : mbs > 10 ? ".6s" : mbs > 0.5 ? "1.2s" : "2s");
       }
-    }, 500);
-    if (pauseBtn) pauseBtn.addEventListener("click", () => {
-      state.paused = !state.paused;
-      pauseBtn.textContent = state.paused ? "繼續" : "暫停";
-      if (panel) panel.classList.toggle("paused", state.paused);
-      window.toast(state.paused ? "已暫停" : "繼續上傳");
-    });
+    }, 250);
+    // 暫停鈕只掛一次監聽，狀態存在 panel 上（同一頁第二次上傳才不會雙重觸發）
+    if (pauseBtn && !pauseBtn.dataset.bound) {
+      pauseBtn.dataset.bound = "1";
+      pauseBtn.addEventListener("click", () => {
+        const st = panel && panel.__state;
+        if (!st) return;
+        st.paused = !st.paused;
+        pauseBtn.textContent = st.paused ? "繼續" : "暫停";
+        if (panel) panel.classList.toggle("paused", st.paused);
+        window.toast(st.paused ? "已暫停" : "繼續上傳");
+      });
+    }
 
     async function worker(t) {
       while (true) {
@@ -141,8 +205,10 @@
         setRow(t, `上傳中 #${i + 1}`, "live");
         const cell = cellOf(i);
         if (cellEls[cell]) cellEls[cell].classList.add("active");
+        const part = file.slice(i * CHUNK, (i + 1) * CHUNK);
+        state.sentBytes += part.size;  // 送出就計，4MB 級距不會讓數字跳動或歸零
         const fd = new FormData();
-        fd.append("file_chunk", file.slice(i * CHUNK, (i + 1) * CHUNK), "chunk");
+        fd.append("file_chunk", part, "chunk");
         fd.append("upload_id", uploadId);
         fd.append("index", String(i));
         fd.append("filename", file.name);
@@ -158,7 +224,6 @@
           } catch { /* 非 JSON 回應就忽略 */ }
         } catch (err) { state.failed = err; setRow(t, "失敗", "err"); return; }
         state.done++;
-        state.doneBytes += Math.min(CHUNK, file.size - i * CHUNK);
         cellGot[cell]++;
         if (cellGot[cell] >= cellNeed[cell] && cellEls[cell]) {
           cellEls[cell].classList.remove("active");
@@ -177,11 +242,18 @@
       return;
     }
     if (pct) pct.textContent = "合併中…";
+    const elapsed = Math.max((performance.now() - startedAt) / 1000, 0.001);
     try {
       const body = { upload_id: uploadId, filename: file.name, total_chunks: total };
-      if (isPublic && folderInput && folderInput.value.trim()) body.folder = folderInput.value.trim();
-      if (!isPublic && folderIdInput && folderIdInput.value) body.folder_id = folderIdInput.value;
-      if (tokenInput && tokenInput.value) body.token = tokenInput.value;
+      if (isPublic) {
+        const folderText = fieldValue(form, "folder");  // 既有資料夾 ID 或自訂名稱都能用
+        if (folderText) body.folder = folderText;
+      } else {
+        const fid = fieldValue(form, "folder_id");
+        if (fid) body.folder_id = fid;
+      }
+      const token = fieldValue(form, "token");
+      if (token) body.token = token;
       const res = await fetch(mergeUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -191,21 +263,22 @@
       if (!res.ok) throw new Error(data.detail || ("HTTP " + res.status));
       if (btn) btn.loading = false;
       if (isPublic) {
-        const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
         const out = form.parentElement.querySelector("[data-upload-result]");
         const durl = data.download_url || data.url;
         const furl = data.folder_url || data.share_url;
-        let html = `<mdui-card variant="filled" class="card-pad result-box">
-          <div><strong>已上傳：</strong> ${esc(data.filename)} (${fmtMB(data.size_bytes)})</div>
-          <div class="rlink"><code>${esc(durl)}</code><span class="rlink-btns">` +
-          (furl ? "" : `<mdui-button variant="text" data-preview="${esc(durl)}?preview=1" data-name="${esc(data.filename)}">預覽</mdui-button>`) +
-          `<mdui-button variant="text" data-copy="${esc(durl)}">複製</mdui-button></span></div>`;
+        const secs = elapsed < 10 ? elapsed.toFixed(1) : Math.round(elapsed);
+        const rows = [
+          linkRow("檔案", durl,
+            `<mdui-button variant="text" data-preview="${esc(durl)}?preview=1" data-name="${esc(data.filename)}">預覽</mdui-button>` +
+            `<mdui-button variant="text" data-copy="${esc(durl)}">複製</mdui-button>`),
+        ];
         if (furl) {
-          html += `<div class="rlink"><span class="rlink-label">資料夾</span><code>${esc(furl)}</code><span class="rlink-btns">` +
+          rows.push(linkRow("資料夾", furl,
             `<a href="${esc(furl)}"><mdui-button variant="text">開啟</mdui-button></a>` +
-            `<mdui-button variant="text" data-copy="${esc(furl)}">複製</mdui-button></span></div>`;
+            `<mdui-button variant="text" data-copy="${esc(furl)}">複製</mdui-button>`));
         }
-        html += `</mdui-card>`;
+        const html = resultCard("上傳完成", data.filename,
+          `${fmtMB(data.size_bytes)} · ${secs} 秒 · 平均 ${fmtMB(data.size_bytes / elapsed)}/s`, rows);
         if (out) out.innerHTML = html;
         if (panel) panel.hidden = true;
         window.toast("上傳完成");
@@ -326,8 +399,7 @@
     document.querySelectorAll("form[data-mkdir]").forEach((form) => {
       form.addEventListener("submit", async (ev) => {
         ev.preventDefault();
-        const input = form.querySelector('[name="name"]');
-        const name = input && input.value.trim();
+        const name = fieldValue(form, "name");
         if (!name) { window.toast("請輸入資料夾名稱"); return; }
         try {
           const res = await fetch("/api/folders", {
@@ -448,23 +520,20 @@
         btn.loading = true;
         try {
           const host = btn.closest(".card-pad") || btn.parentElement;
-          const nameInput = host ? host.querySelector('[name="mkdir-name"]') : null;
-          const body = nameInput && nameInput.value.trim() ? { name: nameInput.value.trim() } : {};
+          const name = host ? fieldValue(host, "mkdir-name") : "";
           const res = await fetch("/api/public/folder", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body),
+            body: JSON.stringify(name ? { name } : {}),
           });
           const data = await res.json();
           const out = host ? host.querySelector("[data-upload-result]") : null;
           if (out) {
-            const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
-            const title = data.folder_name ? esc(data.folder_name) : "資料夾已建立";
-            out.innerHTML = `<mdui-card variant="filled" class="card-pad result-box">
-              <div><strong>${title}</strong></div>
-              <div class="rlink"><code>${esc(data.folder_url)}</code><span class="rlink-btns">` +
-              `<a href="${esc(data.folder_url)}"><mdui-button variant="text">開啟</mdui-button></a>` +
-              `<mdui-button variant="text" data-copy="${esc(data.folder_url)}">複製</mdui-button></span></div></mdui-card>`;
+            out.innerHTML = resultCard("資料夾已建立", "", data.folder_name || "未命名資料夾", [
+              linkRow("連結", data.folder_url,
+                `<a href="${esc(data.folder_url)}"><mdui-button variant="text">開啟</mdui-button></a>` +
+                `<mdui-button variant="text" data-copy="${esc(data.folder_url)}">複製</mdui-button>`),
+            ]);
             window.toast("資料夾已建立");
           } else {
             window.location.href = data.folder_url;
