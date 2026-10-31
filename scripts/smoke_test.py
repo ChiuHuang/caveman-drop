@@ -44,34 +44,12 @@ print("browser /upload OK (thread panel present)")
 r = c.get("/docs", headers=B)
 assert "docs-layout" in r.text
 print("browser /docs OK")
-# the guide follows the page language for agents too, not just browsers
-TW_CURL = {"User-Agent": "curl/8.0", "Accept": "*/*", "CF-Connecting-IP": "120.122.9.9"}
+# agents get the Markdown source in the language they were rendered in
+TW_CURL = {"User-Agent": "curl/8.0", "Accept": "*/*", "Cookie": "lang=zh-TW"}
 assert c.get("/docs/api", headers=TW_CURL).text.startswith("# API 參考")
 assert c.get("/docs/api", headers=J).text.startswith("# API reference")
 assert c.get("/docs", headers=J).text.startswith("# CaveMan Drop")
 print("curl /docs/api OK (zh-TW and English sources)")
-
-# --- legal page: bilingual, Taiwan law, reachable at /legal ---
-lg = c.get("/docs/legal", headers=J)
-assert lg.text.startswith("# 法律條款 / Legal"), lg.text[:40]
-for cite in ("第六章之一", "民事免責事由實施辦法", "兒童及少年性剝削防制條例",
-             "刑法", "個人資料保護法", "通信秘密保障法", "24 小時內", "7 個工作天",
-             "319 條之 3", "第 38 條"):
-    assert cite in lg.text, f"missing Taiwan-law citation: {cite}"
-assert "中華民國" in lg.text and "Republic of China (Taiwan)" in lg.text
-assert "臺灣沒有美國 DMCA" in lg.text, "must state that the DMCA regime does not apply here"
-for absent in ("Digital Millennium", "mainland", "中華人民共和國", "PRC", "Cybersecurity Law",
-               "PIPL", "censor"):
-    assert absent not in lg.text, f"wrong-jurisdiction text leaked in: {absent}"
-lgb = c.get("/docs/legal", headers=B)
-assert "docs-layout" in lgb.text and "Legal" in lgb.text
-r = c.get("/legal", headers=B, follow_redirects=False)
-assert r.status_code == 303 and r.headers["location"] == "/docs/legal"
-h = c.get("/", headers=B).text
-assert 'class="legalbar"' in h
-assert h.index("legalbar") > h.index("Public upload"), "legal must be at the bottom"
-assert "data-tos" not in h
-print("legal page OK (zh-TW + English, Taiwan law, bottom of page)")
 
 # --- ?auth=<PASSWORD> for proxied clients that cannot carry our cookie ---
 import app.auth as _auth
@@ -107,48 +85,41 @@ _auth._fails.clear()
 assert "data-drive" in anon2.get("/?auth=passw", headers=HB).text, "another IP is unaffected"
 print("?auth= param (proxy case) OK")
 
-# --- language follows the client IP: zh-TW for Taiwan ranges, English elsewhere ---
-TW = {**B, "CF-Connecting-IP": "120.122.9.9"}
-EN_IP = {**B, "CF-Connecting-IP": "8.8.8.8"}
+# --- language: decided by the browser JS via the `lang` cookie, ?lang overrides ---
+TW = {**B, "Cookie": "lang=zh-TW"}
+EN_IP = {**B, "Cookie": "lang=en"}
 zh = c.get("/", headers=TW).text
 en = c.get("/", headers=EN_IP).text
 assert 'lang="zh-TW"' in zh
 assert "免帳號的匿名檔案分享" in zh and "首頁" in zh and "公開上傳" in zh
 assert 'lang="en"' in en
 assert "Anonymous file sharing" in en and "Home" in en and "Public upload" in en
-assert "首頁" not in en and "免帳號" not in en, "non-Taiwan IP must not get Chinese"
-# ?lang override wins over the IP
-assert "免帳號" in c.get("/?lang=zh-TW", headers=EN_IP).text
-assert "Anonymous file sharing" in c.get("/?lang=en", headers=TW).text
-# the footer offers the other language
-assert 'href="?lang=en"' in c.get("/", headers=TW).text and 'href="?lang=zh-TW"' in c.get("/", headers=EN_IP).text
-# every page renders in both languages
-for path in ("/", "/upload", "/login", "/api", "/docs", "/legal"):
-    a = c.get(path, headers=TW)
-    b = c.get(path, headers=EN_IP)
-    assert a.status_code == b.status_code == 200, (path, a.status_code, b.status_code)
-    assert 'lang="zh-TW"' in a.text, f"{path} should be zh-TW for a Taiwan IP"
-    assert 'lang="en"' in b.text, f"{path} should be English for a non-Taiwan IP"
+assert "首頁" not in en and "免帳號" not in en, "non-zh cookie must not get Chinese"
+# no cookie at all: English is the default (the JS upgrades a zh browser later)
+en0 = c.get("/", headers=B).text
+assert 'lang="en"' in en0 and "Anonymous file sharing" in en0
+# every page ships the inline language script + ?lang override wins
+for path in ("/", "/upload", "/login", "/api", "/docs"):
+    r = c.get(path, headers=TW)
+    assert r.status_code == 200, (path, r.status_code)
+    assert "navigator.languages" in r.text, f"{path} must ship the language script"
+    assert 'lang="zh-TW"' in r.text, f"{path} should be zh-TW for a zh cookie"
+    assert 'lang="en"' in c.get(f"{path}?lang=en", headers=TW).text, f"{path} ?lang override failed"
 zh_up = c.get("/upload", headers=TW).text
 en_up = c.get("/upload", headers=EN_IP).text
 assert "建立資料夾" in zh_up and "Create folder" in en_up
 assert "說明（選填）" in zh_up and "Description (optional)" in en_up
 assert "單檔上限 5 GB" in zh_up and "Up to 5 GB per file" in en_up
-# admin pages too
+# admin pages too (?lang= override avoids stomping the session cookie)
 adm = TestClient(app)
 adm.post("/login", data={"password": "passw"})
-zh_adm = adm.get("/", headers=TW).text
-en_adm = adm.get("/", headers=EN_IP).text
+zh_adm = adm.get("/?lang=zh-TW", headers=B).text
+en_adm = adm.get("/?lang=en", headers=B).text
 assert "我的雲端" in zh_adm and "My drive" in en_adm
 assert "公開（" in zh_adm and "Public (" in en_adm
-# Taiwan range boundaries from the brief
-for ip in ("1.32.208.0", "1.32.215.255", "36.224.0.0", "36.239.255.255", "120.120.0.0",
-           "120.121.5.5", "120.123.255.255", "220.135.0.0", "220.135.255.255"):
-    assert 'lang="zh-TW"' in c.get("/", headers={**B, "CF-Connecting-IP": ip}).text, ip
-for ip in ("1.32.207.255", "1.32.216.0", "36.223.255.255", "36.240.0.0", "120.119.255.255",
-           "120.124.0.0", "220.134.255.255", "220.136.0.0", "1.1.1.1"):
-    assert 'lang="en"' in c.get("/", headers={**B, "CF-Connecting-IP": ip}).text, ip
-print("language by client IP OK (zh-TW ranges vs English elsewhere)")
+# the footer offers the other language
+assert 'href="?lang=en"' in zh and 'href="?lang=zh-TW"' in en
+print("language via browser JS (lang cookie + ?lang) OK")
 
 # --- English readers must not hit a wall of Chinese ---
 import re as _re
@@ -168,16 +139,13 @@ for _r in (_names_client.get("/api/folders", headers=J).json()["folders"],
     for _e in _r:
         _user_names.add(str(_e.get("name", "")))
 for path in ("/", "/upload", "/login", "/api", "/docs", "/docs/index", "/docs/quickstart",
-             "/docs/api", "/docs/limits", "/docs/legal", "/f/" + pub_folder, "/nope-404"):
+             "/docs/api", "/docs/limits", "/docs/selfhost", "/f/" + pub_folder, "/nope-404"):
     page_en = c.get(path, headers=EN_IP)
     assert page_en.status_code in (200, 404), (path, page_en.status_code)
     body = page_en.text
     for _n in _user_names:          # Chinese folder/file names are the user's, not ours
         body = body.replace(_n, "")
     cjk = set(_CJK.findall(body))
-    # /legal is one bilingual file on purpose; everything else must be English
-    if path == "/docs/legal":
-        continue
     assert not cjk, f"{path} leaks Chinese to English readers: {''.join(sorted(cjk))[:40]}"
 # the guide really is translated, not just relabelled
 assert "Quick start" in c.get("/docs/quickstart", headers=EN_IP).text
@@ -478,8 +446,8 @@ assert 'class="frow"' in r.text
 assert 'value="drive"' in r.text and 'value="public"' in r.text
 assert 'value="all"' not in r.text and 'value="folders"' not in r.text, "no more tab soup"
 # footer: links only, no rules sentence, no tagline
-foot = r.text[r.text.index('class="legalbar"'):]
-assert "/legal" in foot and "llms.txt" in foot and "Limits" in foot
+foot = r.text[r.text.index('class="pagebar"'):]
+assert "/legal" not in foot and "llms.txt" in foot and "Limits" in foot
 assert "Lawful use only" not in r.text and "offending content" not in r.text
 assert "machines and AI" not in r.text
 print("private-mode dashboard OK (drive: one list, icons in header)")

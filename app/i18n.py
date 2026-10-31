@@ -1,62 +1,39 @@
 """Language selection and UI strings.
 
-Chinese (Traditional, zh-TW) is served to clients on the Taiwan ISP ranges
-listed in ``TW_NETWORKS``; every other address gets English. ``?lang=en`` /
-``?lang=zh-TW`` overrides the detection, which is handy for testing and for
-anyone who wants the other language.
+Two languages: Traditional Chinese (zh-TW) and English. The **browser**, not
+the server, decides which one: an inline script in ``<head>`` (see
+:mod:`app.ui`) reads ``navigator.languages``, stores the result in a ``lang``
+cookie and reloads once when the server-rendered language differs. After
+that first visit the cookie travels with every request, so pages come out in
+the right language with no flash and no IP lookup logic at all.
+
+``?lang=zh-TW`` / ``?lang=en`` still overrides everything (it also rewrites
+the cookie, via the same inline script).
 """
 
 from __future__ import annotations
 
-import ipaddress
 from typing import Any
 
 from fastapi import Request
 
-from .storage import client_ip
-
 ZH = "zh-TW"
 EN = "en"
 
-# Taiwan ISP / Taipei-region blocks. Everything else is served English.
-# Note: 120.120.0.0 - 120.123.255.255 is not a single CIDR (the second octet
-# varies), so it is listed as four /16s.
-TW_NETWORKS = [
-    ipaddress.ip_network("1.32.208.0/21"),    # 1.32.208.0 - 1.32.215.255
-    ipaddress.ip_network("36.224.0.0/12"),     # 36.224.0.0 - 36.239.255.255
-    ipaddress.ip_network("120.120.0.0/16"),    # 120.120.0.0 - 120.123.255.255
-    ipaddress.ip_network("120.121.0.0/16"),
-    ipaddress.ip_network("120.122.0.0/16"),
-    ipaddress.ip_network("120.123.0.0/16"),
-    ipaddress.ip_network("220.135.0.0/16"),   # 220.135.0.0 - 220.135.255.255
-]
-
-_cache: dict[str, str] = {}
-
-
-def is_taiwan(ip: str) -> bool:
-    try:
-        addr = ipaddress.ip_address((ip or "").strip())
-    except ValueError:
-        return False
-    return any(addr in net for net in TW_NETWORKS)
+COOKIE_NAME = "lang"
 
 
 def lang_for(request: Request) -> str:
-    """zh-TW for Taiwan client IPs, English for everyone else."""
+    """`?lang=` override first, then the browser-written cookie, else English."""
     want = (request.query_params.get("lang") or "").strip().lower()
     if want in ("en", "english"):
         return EN
     if want in ("zh", "zh-tw", "zh_tw", "zh-hant", "chinese"):
         return ZH
-    ip = client_ip(request)
-    hit = _cache.get(ip)
-    if hit is None:
-        hit = ZH if is_taiwan(ip) else EN
-        if len(_cache) > 4096:
-            _cache.clear()
-        _cache[ip] = hit
-    return hit
+    cookie = (request.cookies.get(COOKIE_NAME) or "").strip()
+    if cookie in (ZH, EN):
+        return cookie
+    return EN
 
 
 def other(lang: str) -> str:

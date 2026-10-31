@@ -11,7 +11,7 @@ import os
 
 import markdown as md_lib
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 
 from ..negotiation import wants_html
 from ..i18n import lang_for, t
@@ -27,7 +27,7 @@ PAGES = [
     ("quickstart", "快速開始", "Quick start"),
     ("api", "API 參考", "API reference"),
     ("limits", "限制與規範", "Limits"),
-    ("legal", "法律條款", "Legal"),
+    ("selfhost", "自行架設", "Self-hosting"),
 ]
 
 _md = md_lib.Markdown(extensions=["fenced_code", "tables"])
@@ -41,11 +41,8 @@ def _read(path: str) -> str | None:
 
 
 def _load(slug: str, lang: str = "zh-TW") -> str | None:
-    """`docs/en/<slug>.md` for English readers, `docs/<slug>.md` otherwise.
-
-    `legal.md` is one bilingual file, so it is served as-is either way.
-    """
-    if lang != "zh-TW" and slug != "legal":
+    """`docs/en/<slug>.md` for English readers, `docs/<slug>.md` otherwise."""
+    if lang != "zh-TW":
         src = _read(os.path.join(DOCS_EN_DIR, f"{slug}.md"))
         if src is not None:
             return src
@@ -77,12 +74,6 @@ def _docs_shell(lang: str, active: str, body_html: str, slug: str = "index") -> 
         active="docs",
         lang=lang,
     )
-
-
-@router.get("/legal")
-async def legal_alias(request: Request):
-    """/legal is a memorable alias for /docs/legal."""
-    return RedirectResponse("/docs/legal", status_code=303)
 
 
 @router.get("/docs")

@@ -22,10 +22,10 @@ def _api_payload(request: Request) -> dict:
         "name": "CaveMan Drop public API",
         "description": "Anonymous file sharing. Upload a file, get a permanent share link back. No auth required. file_id is the sha256 of the content, so identical files are stored once.",
         "language": (
-            "Browser UI language follows the client IP: Traditional Chinese (zh-TW) for "
-            "Taiwan ranges (1.32.208.0/21, 36.224.0.0/12, 120.120.0.0-120.123.255.255, "
-            "220.135.0.0/16), English everywhere else. Force it with ?lang=zh-TW or "
-            "?lang=en. JSON and text output is always English."
+            "Browser UI language is decided by the browser: an inline page script reads "
+            "navigator.languages, stores the pick in a lang cookie and reloads once "
+            "(zh-TW for Traditional-Chinese browsers, English otherwise). Force it with "
+            "?lang=zh-TW or ?lang=en. JSON and text output is always English."
         ),
         "storage": {
             "file_id": "sha256 hex of the file bytes (same content = same id and link)",
@@ -119,11 +119,6 @@ def _api_payload(request: Request) -> dict:
                     "the measured Mbps. Optional `ms` field with your own duration. The "
                     "browser does not use it — it adapts from the first chunks it uploads."
                 ),
-            },
-            "legal": {
-                "method": "GET",
-                "url": f"{base}/legal",
-                "notes": "Terms of service, acceptable use, Taiwan copyright takedown procedure, privacy. Bilingual zh-TW / English; /legal redirects to /docs/legal.",
             },
             "browse_page": {
                 "method": "GET",
@@ -318,21 +313,13 @@ GET {base}/api (JSON index)
 - Identical bytes are stored once: `file_id` is the SHA-256 of the
   content, so re-uploading the same file reuses the blob.
 
-## Legal
-GET {base}/legal  (bilingual zh-TW / English)
-Terms of service, acceptable use, the Taiwan copyright notice-and-takedown
-procedure (著作權法第六章之一 + 民事免責事由實施辦法; there is no DMCA in
-Taiwan), privacy, and the takedown contact. Upload only content you own or
-are authorised to share; child sexual abuse material (兒童及少年性剝削防制條例
-§36/§38/§39, 24-hour removal duty under §8) is strictly prohibited and
-reported to the competent authorities.
-
 ## Language
-Browser pages render in Traditional Chinese for client IPs in the Taiwan
-ranges (1.32.208.0/21, 36.224.0.0/12, 120.120.0.0-120.123.255.255,
-220.135.0.0/16) and in English for every other IP. Add ?lang=zh-TW or
+The browser pages are rendered in Traditional Chinese or English by the
+browser itself: an inline script reads navigator.languages, stores the pick
+in a `lang` cookie and reloads once when needed (Traditional Chinese for
+zh-TW/Hant/HK/MO browsers, English for everything else). Add ?lang=zh-TW or
 ?lang=en to any page to force one. JSON, plain text and this document are
-always English.
+always English. For scripted clients there is no language logic at all.
 
 AI agents should prefer the JSON API endpoints above and use the returned `url` or `download_url` directly.
 """

@@ -1,10 +1,11 @@
 """MDUI v2 HTML shell + reusable page components (zh-TW or English).
 
 Every user-facing route renders through :func:`page` so the whole site shares
-one Material Design 3 look (MDUI v2 via CDN, auto dark mode). Language follows
-the client IP (Traditional Chinese for Taiwan, English elsewhere) — see
-:mod:`app.i18n`. API clients never see this; they get JSON/text via content
-negotiation.
+one Material Design 3 look (MDUI v2 via CDN, auto dark mode). The language is
+decided by the browser, not the server: an inline script in ``<head>`` reads
+``navigator.languages``, writes the ``lang`` cookie and reloads once when it
+differs from what this page was rendered in — see :mod:`app.i18n`. API
+clients never see this; they get JSON/text via content negotiation.
 """
 
 from __future__ import annotations
@@ -17,6 +18,41 @@ from .i18n import EN, ZH, other, t
 MDUI_CSS = "https://unpkg.com/mdui@2/mdui.css"
 MDUI_JS = "https://unpkg.com/mdui@2/mdui.global.js"
 ICON_FONT = "https://fonts.googleapis.com/icon?family=Material+Icons"
+
+# Runs inline in <head>, before anything paints, so a Chinese browser never
+# sees a flash of English. Reads navigator.languages (any zh variant that
+# reads Traditional Chinese comfortably → zh-TW), keeps ?lang= as an override,
+# stores the choice in the `lang` cookie the server reads next time (see
+# app.i18n.lang_for) and reloads once only when the rendered language differs.
+# The sessionStorage guard stops the loop in the (rare) cookieless case.
+LANG_SCRIPT = """<script>
+(function () {
+  var want = "";
+  var q = new URLSearchParams(location.search);
+  var ov = (q.get("lang") || "").toLowerCase();
+  function pick() {
+    var langs = navigator.languages || [navigator.language || "en"];
+    for (var i = 0; i < langs.length; i++) {
+      var l = (langs[i] || "").toLowerCase();
+      if (l.indexOf("zh") === 0
+          && (l === "zh" || l === "zh-hant" || l.indexOf("zh-tw") === 0
+              || l.indexOf("zh-hant") === 0 || l.indexOf("zh-hk") === 0
+              || l.indexOf("zh-mo") === 0)) return "zh-TW";
+    }
+    return "en";
+  }
+  if (ov) want = ov.indexOf("zh") === 0 ? "zh-TW" : "en";
+  else want = pick();
+  var cur = document.documentElement.getAttribute("data-lang");
+  document.cookie = "lang=" + want + ";path=/;max-age=31536000;SameSite=Lax";
+  var guard = "lang-reloaded-" + want;
+  if (want !== cur) {
+    if (sessionStorage.getItem(guard)) return;
+    try { sessionStorage.setItem(guard, "1"); } catch (e) {}
+    location.replace(location.href);
+  }
+})();
+</script>"""
 
 
 def nav_items(lang: str, active: str, authed: bool, solo: bool = False) -> list[tuple[str, str, str, str]]:
@@ -40,18 +76,16 @@ def nav_items(lang: str, active: str, authed: bool, solo: bool = False) -> list[
     return items
 
 
-def legal_footer(lang: str, extra_qs: str = "") -> str:
-    """Bottom-of-page links: the legal page, the limits, llms.txt, language switch.
+def page_footer(lang: str, extra_qs: str = "") -> str:
+    """Bottom-of-page links: the limits, llms.txt and the language switch.
 
     `extra_qs` keeps the current view (e.g. the open folder) when the reader
     switches language.
     """
-    legal = "法律條款" if lang == ZH else "Legal"
     limits = "限制" if lang == ZH else "Limits"
     return (
-        '<footer class="legalbar">'
-        '<span class="legal-links">'
-        f'<a href="/legal">{html.escape(legal)}</a>'
+        '<footer class="pagebar">'
+        '<span class="page-links">'
         f'<a href="/docs/limits">{html.escape(limits)}</a>'
         '<a href="/llms.txt">llms.txt</a>'
         f'<a href="?{html.escape(extra_qs)}lang={other(lang)}"'
@@ -86,6 +120,7 @@ def page(
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{html.escape(title)} — CaveMan Drop</title>
+{LANG_SCRIPT}
 <link rel="stylesheet" href="{MDUI_CSS}">
 <link rel="stylesheet" href="{ICON_FONT}">
 <link rel="stylesheet" href="/static/app.css">
@@ -110,7 +145,7 @@ def page(
   <mdui-layout-main>
     <main class="page" data-droproot>
       {body}
-      {legal_footer(lang, extra_qs)}
+      {page_footer(lang, extra_qs)}
       <div class="drophint" data-drophint hidden>{html.escape(t(lang, "drop_hint"))}</div>
     </main>
   </mdui-layout-main>

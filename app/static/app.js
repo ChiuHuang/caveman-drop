@@ -8,7 +8,7 @@
   const ADAPT_CHUNKS = 6;
   const ADAPT_BYTES = 4 * 1024 * 1024;
 
-  // 語言跟著 IP（見 app/i18n）：台灣網段中文，其他英文
+  // 語言由瀏覽器偵測（<head> 內腳本寫 lang cookie，見 app/i18n/ui）：server 端 data-lang 就是結果
   const LANG = (document.documentElement && document.documentElement.dataset.lang) === "zh-TW"
     ? "zh-TW" : "en";
   const T = {

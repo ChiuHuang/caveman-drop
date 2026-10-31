@@ -79,12 +79,12 @@ for i in range(total):
 r = httpx.post(f"{BASE}/api/public/merge_chunks",
                json={"upload_id": uid, "filename": "big.bin", "total_chunks": total})
 print(r.json()["download_url"])
+```
 
 瀏覽器不再另外送探針：先照 16 線程上傳，用**前幾個 chunk 量到的真實速度**
 決定要加到多少並行數（慢連線 32 / 64 / 128，快連線維持 16）。速度數字來自
 XHR 的上傳進度事件，所以是實際送出的位元組率，不是延遲，也沒有探針浪費的
 流量。`/api/public/probe` 端點仍保留給 curl / 腳本 / AI 量速用。
-```
 
 ## 私人模式
 

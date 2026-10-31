@@ -152,18 +152,3 @@ curl -F file=@big.iso "https://proxy.example/https://this.host/api/upload_chunk?
 | `GET` | `/api` | Full JSON index (browsers get the HTML console) |
 | `GET` | `/llms.txt`, `/api/llms.txt` | The AI-facing document, always plain text |
 | `GET` | `/docs`, `/docs/{page}` | The guide (agents get the Markdown source) |
-| `GET` | `/legal` | Terms, bilingual zh-TW / English; redirects to `/docs/legal` |
-
-## Legal
-
-`/legal` (= `/docs/legal`) is the bilingual (Traditional Chinese / English)
-terms page: scope, acceptable use, the **Taiwan** copyright
-notice-and-takedown procedure (Copyright Act Chapter 6-1 + the Enforcement
-Rules for Copyright Liability Exemption, 7 working days for the rights holder
-to correct), and privacy. Taiwan has no DMCA. Child sexual abuse material is
-zero tolerance (Child and Youth Sexual Exploitation Prevention Act §36/§38/§39;
-a service provider must restrict access or remove it within 24 hours of
-learning of it, §8).
-
-Check that you own the content or are authorised to share it before uploading.
-This page is not legal advice.
