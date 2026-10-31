@@ -44,11 +44,13 @@ from ..storage import (
     public_files,
     public_folder_files,
     public_folder_list,
+    public_folder_meta,
     rename_file_entry,
     rename_private_folder,
     rename_public_folder,
     revoke_share,
     save_entry,
+    set_private_folder_perm,
     speed_probe,
     store_blob,
     stream_download,
@@ -76,11 +78,17 @@ class MergePayload(BaseModel):
 
 class MkdirPayload(BaseModel):
     name: str = ""
+    perm: str = "both"   # default share-link mode: view / upload / both
 
 
 class RenamePayload(BaseModel):
     folder_id: str
     name: str = ""
+
+
+class PermPayload(BaseModel):
+    folder_id: str
+    perm: str
 
 
 class FileRenamePayload(BaseModel):
@@ -90,7 +98,7 @@ class FileRenamePayload(BaseModel):
 
 
 class SharePayload(BaseModel):
-    mode: str
+    mode: Optional[str] = None   # None = the folder's perm (its default mode)
 
 
 class ShareMergePayload(BaseModel):
@@ -111,6 +119,33 @@ def _need_admin(request: Request) -> None:
         return
     if not query_auth_ok(request, raising=wants_html(request)):
         raise HTTPException(401, "Login required")
+
+
+def _need_pub_owner(request: Request, folder_id: str) -> None:
+    """Manage a public folder: a signed-in admin, or the browser session that
+    created it (folder.json's `owner` sid — folders made by cookie-less
+    scripts have no owner and stay admin-managed)."""
+    if request.session.get("auth"):
+        return
+    owner = str(public_folder_meta(folder_id).get("owner", "") or "")
+    if owner and owner == request.session.get("sid"):
+        return
+    raise HTTPException(401, "Login required")
+
+
+def _need_pub_owner_file(request: Request, file_id: str) -> None:
+    """Remove a public file: a signed-in admin, or the owner of any public
+    folder that holds it. Ownerless (e.g. single) files stay admin-only."""
+    if request.session.get("auth"):
+        return
+    sid = request.session.get("sid") or ""
+    roots = [os.path.join(settings.public_dir, d) for d in listdir_safe(settings.public_dir)]
+    for d in roots:
+        if os.path.exists(os.path.join(d, file_id + ".json")):
+            owner = str(public_folder_meta(os.path.basename(d)).get("owner", "") or "")
+            if owner and owner == sid:
+                return
+    raise HTTPException(401, "Login required")
 
 
 def _check_private(request: Request) -> None:
@@ -179,8 +214,21 @@ async def private_probe(request: Request, probe: UploadFile = File(...), ms: Opt
 async def create_folder(request: Request, payload: MkdirPayload):
     if not authed(request):
         raise HTTPException(401)
-    fid, meta = create_private_folder(payload.name, t(lang_for(request), "unnamed_folder"))
-    return {"success": True, "folder_id": fid, "name": meta["name"]}
+    fid, meta = create_private_folder(
+        payload.name,
+        t(lang_for(request), "unnamed_folder"),
+        perm=payload.perm if payload.perm in ("view", "upload", "both") else "both",
+    )
+    return {"success": True, "folder_id": fid, "name": meta["name"], "perm": meta["perm"]}
+
+
+@router.post("/api/folders/perm")
+async def perm_folder(request: Request, payload: PermPayload):
+    """Change a private folder's default share-link mode: view, upload, both.
+    New share links default to this; per-link mode can still be chosen."""
+    _need_admin(request)
+    perm = set_private_folder_perm(payload.folder_id, payload.perm)
+    return {"success": True, "folder_id": payload.folder_id, "perm": perm}
 
 
 @router.post("/api/folders/rename")
@@ -195,8 +243,9 @@ async def rename_folder(request: Request, payload: RenamePayload):
 
 @router.post("/api/public/folder/rename")
 async def rename_pub_folder(request: Request, payload: RenamePayload):
-    """Change a public folder's name. Its URL does not change."""
-    _need_admin(request)
+    """Change a public folder's name. Its URL does not change. The admin, or
+    the browser session that created the folder."""
+    _need_pub_owner(request, payload.folder_id)
     name = rename_public_folder(
         payload.folder_id, payload.name, t(lang_for(request), "unnamed_folder")
     )
@@ -243,6 +292,7 @@ async def list_folders(request: Request):
                 "id": fid,
                 "name": m.get("name", ""),
                 "ctime": m.get("ctime", 0),
+                "perm": m.get("perm", "both"),
                 "count": counts.get(fid, 0),
                 "shares": [
                     {"token": t, "mode": s["mode"], "url": f"{base}/s/{t}"}
@@ -272,7 +322,8 @@ async def delete_folder(request: Request, folder_id: str):
 async def share_folder(request: Request, folder_id: str, payload: SharePayload):
     if not authed(request):
         raise HTTPException(401)
-    token, meta = create_share(folder_id, payload.mode)
+    mode = payload.mode or get_private_folders().get(folder_id, {}).get("perm") or "view"
+    token, meta = create_share(folder_id, mode)
     base = base_url(request)
     return {"success": True, "token": token, "mode": meta["mode"], "url": f"{base}/s/{token}"}
 
@@ -296,8 +347,8 @@ async def share_merge_chunks(request: Request, payload: ShareMergePayload):
     share = get_share(payload.token)
     if not share:
         raise HTTPException(404, "Share not found")
-    if share.get("mode") != "upload":
-        raise HTTPException(403, "This link is view-only")
+    if share.get("mode") not in ("upload", "both"):
+        raise HTTPException(403, "This link does not allow uploads")
     folder_id = share["folder_id"]
     if folder_id not in get_private_folders():
         raise HTTPException(404, "Folder not found")
@@ -336,6 +387,8 @@ async def share_download(request: Request, token: str, file_id: str, preview: bo
     share = get_share(token)
     if not share:
         raise HTTPException(404)
+    if share.get("mode") not in ("view", "both"):
+        raise HTTPException(403, "This link is upload-only")
     meta = entry_meta(settings.upload_dir, file_id)
     if meta is None:
         raise HTTPException(404)
@@ -366,8 +419,10 @@ async def share_page(request: Request, token: str):
             return HTMLResponse(_page(t(lang, "not_found"), body, lang=lang), status_code=404)
         return PlainTextResponse("Folder not found.", status_code=404)
     name = meta.get("name", "")
-    can_upload = share.get("mode") == "upload"
-    files = [f for f in private_files() if f.get("folder") == share["folder_id"]]
+    mode = share.get("mode", "view")
+    can_upload = mode in ("upload", "both")
+    can_view = mode in ("view", "both")
+    files = [f for f in private_files() if f.get("folder") == share["folder_id"]] if can_view else []
     base = base_url(request)
     if not wants_html(request):
         lines = [f"Shared folder: {name}", f"mode: {share['mode']}", f"files: {len(files)}", ""]
@@ -392,6 +447,11 @@ async def share_page(request: Request, token: str):
             </form>
             <div data-upload-result></div>
           </mdui-card>""" if can_upload else ""
+    files_card = f"""
+          <mdui-card variant="outlined" class="card-pad">
+            <h2>{html.escape(t(lang, "files_h", n=len(files)))}</h2>
+            {share_file_rows(lang, files, token, base)}
+          </mdui-card>""" if can_view else ""
     return HTMLResponse(
         _page(
             name,
@@ -401,10 +461,7 @@ async def share_page(request: Request, token: str):
           <p>{html.escape(t(lang, "share_meta", n=len(files), mode=mode))}</p>
         </mdui-card>
         <div class="stack">
-          <mdui-card variant="outlined" class="card-pad">
-            <h2>{html.escape(t(lang, "files_h", n=len(files)))}</h2>
-            {share_file_rows(lang, files, token, base)}
-          </mdui-card>
+          {files_card}
           {up_card}
         </div>""",
             active="home",
@@ -530,7 +587,12 @@ async def move_public_file(request: Request, payload: MovePayload):
     The same bytes can sit in more than one public folder, so the source folder
     comes from the row that was dragged; without it we fall back to a search.
     """
-    _need_admin(request)
+    # Admin, or the owner session of the folder the file is dragged from.
+    if not request.session.get("auth"):
+        srcid = payload.from_folder_id or ""
+        owner = str(public_folder_meta(srcid).get("owner", "") or "") if srcid else ""
+        if not (owner and owner == request.session.get("sid")):
+            raise HTTPException(401, "Login required")
     src = ""
     if payload.from_folder_id:
         cand = os.path.join(settings.public_dir, payload.from_folder_id)
@@ -567,8 +629,9 @@ async def move_public_file(request: Request, payload: MovePayload):
 
 @router.post("/delpub/{file_id}")
 async def delete_public_file(request: Request, file_id: str):
-    """Remove this file everywhere it is shared publicly (bytes stay if private)."""
-    _need_admin(request)
+    """Remove this file everywhere it is shared publicly (bytes stay if private).
+    A signed-in admin, or the owner session of a folder holding it."""
+    _need_pub_owner_file(request, file_id)
     n = 0
     roots = [settings.single_dir] + [
         os.path.join(settings.public_dir, d) for d in listdir_safe(settings.public_dir)
@@ -584,7 +647,8 @@ async def delete_public_file(request: Request, file_id: str):
 
 @router.post("/delpubdir/{folder_id}")
 async def delpub_folder(request: Request, folder_id: str):
-    _need_admin(request)
+    """Delete a public folder. The admin, or the browser session that created it."""
+    _need_pub_owner(request, folder_id)
     for f in public_folder_files(folder_id):
         forget_short_code(f["id"])
     n = delete_public_folder(folder_id)

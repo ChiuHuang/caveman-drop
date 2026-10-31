@@ -14,7 +14,7 @@ sha256 of the content.
   "success": true,
   "file_id": "…64 hex chars, sha256…",
   "deduplicated": false,
-  "short_url": "https://usercontent.qiuhuang.dev/usercontent/f127ca.jpg",
+  "short_url": "https://usercontent.qiuhuang.dev/f127ca.jpg",
   "download_url": "http://localhost:20042/dl/s/…"
 }
 ```

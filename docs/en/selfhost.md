@@ -80,7 +80,7 @@ WantedBy=multi-user.target
   no headers, set `PUBLIC_BASE_URL` to pin the domain.
 - Those headers are trusted: firewall the backend port against direct access,
   or simply set `PUBLIC_BASE_URL`.
-- The `/usercontent/<code>.<ext>` short path carries
+- The `/<code>.<ext>` short path carries
   `Cache-Control: immutable`, so it can be pointed at the same machine and
   handed to a CDN as-is.
 

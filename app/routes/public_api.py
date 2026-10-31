@@ -25,6 +25,7 @@ from ..config import settings
 from ..negotiation import wants_html
 from ..storage import (
     MAX_CHUNK_BYTES,
+    PERMS,
     assemble_chunks,
     bin_path,
     bw_pace,
@@ -41,11 +42,13 @@ from ..storage import (
     probe_check,
     public_folder_dir,
     public_folder_files,
+    public_folder_meta,
     public_folder_name,
     public_file_by_id,
     resolve_public_folder,
     resolve_short_code,
     save_entry,
+    set_public_folder_perm,
     short_code,
     single_blob,
     single_meta,
@@ -61,6 +64,7 @@ from ..storage import (
 )
 from ..i18n import lang_for, t
 from ..ui import file_rows, fmt_size, page
+from ..auth import session_sid
 from ..urls import base_url
 
 router = APIRouter()
@@ -133,17 +137,65 @@ def _file_meta(original_name: str, size: int, description: str = "") -> dict:
 
 
 def _short_url(base: str, file_id: str, ext: str) -> str:
-    """catbox-style share link: /usercontent/<short code>.<ext> (CDN-cacheable).
+    """catbox-style share link: /<short code>.<ext> (CDN-cacheable).
 
     When USERCONTENT_HOST is set (the default deployment), the link points at
     that CDN host instead of the serving host, so the copy button hands out the
-    shortest, cacheable URL by default."""
+    shortest, cacheable URL by default. /usercontent/<code>.<ext> stays as an
+    alias for links handed out earlier."""
     code = short_code(file_id)
     if not code:
         return ""
     if settings.usercontent_host:
-        return f"https://{settings.usercontent_host}/usercontent/{code}{ext}"
-    return f"{base}/usercontent/{code}{ext}"
+        return f"https://{settings.usercontent_host}/{code}{ext}"
+    return f"{base}/{code}{ext}"
+
+
+def _probably_browser(request: Request) -> bool:
+    """Does this request look like a browser that will keep cookies?
+
+    Ownership only makes sense for sessions: a browser POST (fetch or form)
+    always sends Origin, and browsers send a Mozilla-ish User-Agent. curl, the
+    AI tools and scripts get folders without an owner —they would not keep a
+    session cookie anyway.
+    """
+    ua = request.headers.get("user-agent", "")
+    return "Mozilla" in ua or bool(request.headers.get("origin"))
+
+
+def _folder_owner(request: Request) -> str:
+    """The sid this browser session already carries, minting one for browser
+    requests. Cookie-less scripts get "" —their folders stay ownerless."""
+    if request.session.get("sid"):
+        return request.session["sid"]
+    return session_sid(request) if _probably_browser(request) else ""
+
+
+def _folder_gate(request: Request, folder_id: str) -> dict:
+    """Access flags for a public folder, from folder.json + this request.
+
+    perm: readonly (list + download), upload (dropbox), or both (default, what
+    folders without a perm always had). The creating session (`owner` sid) and
+    a signed-in admin bypass the perm entirely and may manage the folder.
+
+    404s when the folder does not exist.
+    """
+    meta = public_folder_meta(folder_id)
+    if not meta or not os.path.isdir(public_folder_dir(folder_id)):
+        raise HTTPException(404, "Folder not found")
+    perm = meta.get("perm") if meta.get("perm") in PERMS else "both"
+    owner = str(meta.get("owner", "") or "")
+    is_owner = (bool(owner) and owner == (request.session.get("sid") or "")) \
+        or bool(request.session.get("auth"))
+    return {
+        **meta,
+        "perm": perm,
+        "owner": owner,
+        "can_read": is_owner or perm in ("readonly", "both"),
+        "can_upload": is_owner or perm in ("upload", "both"),
+        "can_manage": is_owner,
+        "owned": bool(owner) and owner == (request.session.get("sid") or ""),
+    }
 
 
 @router.post("/api/public/upload")
@@ -168,7 +220,11 @@ async def public_upload(
             request,
             ip,
             file,
-            resolve_public_folder(folder, t(lang_for(request), "unnamed_folder")),
+            resolve_public_folder(
+                folder,
+                t(lang_for(request), "unnamed_folder"),
+                owner=_folder_owner(request),
+            ),
             description,
         )
 
@@ -201,6 +257,9 @@ async def _upload_to_folder(
 ):
     folder_id = folder
     validate_public_id(folder_id, "folder id")
+    gate = _folder_gate(request, folder_id)
+    if not gate["can_upload"]:
+        raise HTTPException(403, "This folder is read-only")
     fdir = public_folder_dir(folder_id)
     if not os.path.isdir(fdir):
         raise HTTPException(404, "Folder not found")
@@ -228,6 +287,7 @@ async def _upload_to_folder(
         "success": True,
         "folder_id": folder_id,
         "folder_name": public_folder_name(folder_id),
+        "folder_perm": gate["perm"],
         "file_id": fid,
         "filename": original_name,
         "description": meta["description"],
@@ -246,20 +306,36 @@ async def _upload_to_folder(
 
 @router.post("/api/public/folder")
 async def public_create_folder(request: Request):
-    """Create an empty public folder under a free-text name and return its URLs."""
+    """Create an empty public folder and return its URLs.
+
+    Body (JSON): `name` (free text), `perm` = readonly / upload / both —what
+    non-owners may do. The folder is assigned to the calling browser session
+    (a stable sid cookie), so its creator can rename, delete and re-permission
+    it without logging in; folders created by curl scripts get no owner.
+    """
     name = ""
+    perm = "both"
     try:
         body = await request.json()
         if isinstance(body, dict):
             name = clean_name(str(body.get("name", "") or ""))
+            perm = str(body.get("perm", "") or "") or "both"
     except Exception:
         pass
-    folder_id, meta = create_public_folder(name, t(lang_for(request), "unnamed_folder"))
+    if perm not in PERMS:
+        perm = "both"
+    # A browser session owns the folder; a script that sends no cookies does not.
+    owner = _folder_owner(request)
+    folder_id, meta = create_public_folder(
+        name, t(lang_for(request), "unnamed_folder"), perm=perm, owner=owner
+    )
     base = base_url(request)
     return {
         "success": True,
         "folder_id": folder_id,
         "folder_name": meta["name"],
+        "perm": meta["perm"],
+        "owned": bool(owner),
         "folder_url": f"{base}/f/{folder_id}",
         "upload_url": f"{base}/f/{folder_id}",
         "folder_api_url": f"{base}/api/public/folder/{folder_id}",
@@ -319,8 +395,14 @@ async def public_merge_chunks(request: Request, payload: PublicMergePayload):
     }
 
     if payload.folder:
-        folder_id = resolve_public_folder(payload.folder, t(lang_for(request), "unnamed_folder"))
+        folder_id = resolve_public_folder(
+            payload.folder,
+            t(lang_for(request), "unnamed_folder"),
+            owner=_folder_owner(request),
+        )
         validate_public_id(folder_id, "folder id")
+        if not _folder_gate(request, folder_id)["can_upload"]:
+            raise HTTPException(403, "This folder is read-only")
         fdir = public_folder_dir(folder_id)
         if not os.path.isdir(fdir):
             raise HTTPException(404, "Folder not found")
@@ -372,7 +454,7 @@ async def usercontent(request: Request, code: str, preview: bool = False):
 
     The code is the shortest unique prefix of the file's sha256, so the URL is
     stable forever and safe to cache at a CDN (immutable Cache-Control).
-    Public files only — private entries never resolve here.
+    Public files only —private entries never resolve here.
     """
     stem = code.rsplit(".", 1)[0] if "." in code else code
     file_id = resolve_short_code(stem)
@@ -462,6 +544,8 @@ async def public_probe(request: Request, probe: UploadFile = File(...), ms: Opti
 @router.get("/api/public/file/{folder_id}/{file_id}")
 async def public_file_api(request: Request, folder_id: str, file_id: str):
     """Metadata + direct URL for one public file (HTML console for browsers)."""
+    if not _folder_gate(request, folder_id)["can_read"]:
+        raise HTTPException(403, "This folder is upload-only")
     fdir = public_folder_dir(folder_id)
     meta = entry_meta(fdir, file_id)
     if meta is None:
@@ -507,10 +591,12 @@ async def public_file_api(request: Request, folder_id: str, file_id: str):
 
 @router.get("/api/public/folder/{folder_id}")
 async def public_folder_api(request: Request, folder_id: str):
-    """Folder metadata + files (folder UI for browsers)."""
-    fdir = public_folder_dir(folder_id)
-    if not os.path.isdir(fdir):
-        raise HTTPException(404, "Folder not found")
+    """Folder metadata + files (folder UI for browsers). Read-perm respected:
+    a read-only folder lists to anyone; an upload-only folder only lists for
+    its owner (403 for everyone else)."""
+    gate = _folder_gate(request, folder_id)
+    if not gate["can_read"]:
+        raise HTTPException(403, "This folder is upload-only")
     base = base_url(request)
     files = public_folder_files(folder_id)
     for f in files:
@@ -525,6 +611,9 @@ async def public_folder_api(request: Request, folder_id: str):
             "folder_url": f"{base}/f/{folder_id}",
             "share_url": f"{base}/f/{folder_id}",
             "upload_url": f"{base}/f/{folder_id}",
+            "perm": gate["perm"],
+            "owned": gate["owned"],
+            "can_upload": gate["can_upload"],
             "files": files,
         }
     lang = lang_for(request)
@@ -552,6 +641,9 @@ async def public_folder_api(request: Request, folder_id: str):
 
 @router.get("/dl/pub/{folder_id}/{file_id}")
 async def public_download(request: Request, folder_id: str, file_id: str, preview: bool = False):
+    gate = _folder_gate(request, folder_id)
+    if not gate["can_read"]:
+        raise HTTPException(403, "This folder is upload-only")
     validate_file_id(file_id)
     fdir = public_folder_dir(folder_id)
     meta = entry_meta(fdir, file_id)
@@ -598,6 +690,10 @@ async def public_upload_from_url(request: Request, payload: UrlUploadPayload):
     url = (payload.url or "").strip()
     if not re.match(r"^https?://\S+$", url, re.IGNORECASE):
         raise HTTPException(400, "Provide an http(s) URL")
+    # Early perm check so an unpermitted upload never downloads anything.
+    if payload.folder and re.fullmatch(r"[0-9a-fA-F-]{36}", str(payload.folder).strip()):
+        if not _folder_gate(request, str(payload.folder).strip())["can_upload"]:
+            raise HTTPException(403, "This folder is read-only")
     target = f"{settings.proxy_base_url}/{url}"
 
     dest = os.path.join(settings.tmp_dir, f"url_{os.getpid()}_{os.urandom(6).hex()}")
@@ -670,8 +766,14 @@ async def public_upload_from_url(request: Request, payload: UrlUploadPayload):
     }
     base = base_url(request)
     if payload.folder:
-        folder_id = resolve_public_folder(payload.folder, t(lang_for(request), "unnamed_folder"))
+        folder_id = resolve_public_folder(
+            payload.folder,
+            t(lang_for(request), "unnamed_folder"),
+            owner=_folder_owner(request),
+        )
         validate_public_id(folder_id, "folder id")
+        if not _folder_gate(request, folder_id)["can_upload"]:
+            raise HTTPException(403, "This folder is read-only")
         save_entry(public_folder_dir(folder_id), file_id, meta)
         download_url = f"{base}/dl/pub/{folder_id}/{file_id}"
         return {
@@ -712,10 +814,12 @@ async def public_upload_from_url(request: Request, payload: UrlUploadPayload):
 @router.get("/zip/f/{folder_id}")
 async def zip_public_folder(request: Request, folder_id: str):
     """Whole public folder as a live-streamed .zip: built on the fly, never on
-    disk, so nothing is deleted afterwards — the stream simply ends."""
+    disk, so nothing is deleted afterwards —the stream simply ends.
+    Read-perm respected."""
+    gate = _folder_gate(request, folder_id)
+    if not gate["can_read"]:
+        raise HTTPException(403, "This folder is upload-only")
     fdir = public_folder_dir(folder_id)
-    if not os.path.isdir(fdir):
-        raise HTTPException(404, "Folder not found")
     entries = []
     for f in public_folder_files(folder_id):
         p = payload_path(f["id"], fdir, f.get("ext", ""))
@@ -731,5 +835,61 @@ async def zip_public_folder(request: Request, folder_id: str):
         build(fail),
         media_type="application/zip",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(fname)}"},
+    )
+
+
+class FolderPermPayload(BaseModel):
+    folder_id: str
+    perm: str
+
+
+@router.post("/api/public/folder/perm")
+async def public_folder_perm(request: Request, payload: FolderPermPayload):
+    """Set what non-owners may do with a public folder: readonly (list +
+    download), upload (dropbox), or both. The creating session or a signed-in
+    admin only."""
+    meta = public_folder_meta(payload.folder_id)
+    if not meta:
+        raise HTTPException(404, "Folder not found")
+    owner = str(meta.get("owner", "") or "")
+    is_owner = (
+        bool(owner)
+        and owner == (request.session.get("sid") or "")
+    ) or bool(request.session.get("auth"))
+    if not is_owner:
+        raise HTTPException(401, "Login required")
+    perm = set_public_folder_perm(payload.folder_id, payload.perm)
+    return {"success": True, "folder_id": payload.folder_id, "perm": perm}
+
+
+async def short_link(request: Request, code: str, ext: str, preview: bool = False):
+    """Short catbox-style download path at the root: /<code>.<ext>.
+
+    The code is the shortest unique prefix of the file's sha256, so the URL is
+    stable forever and safe to cache at a CDN (immutable Cache-Control) —this
+    here is the host USERCONTENT_HOST points at. Public files only. The dotted
+    /usercontent/<code>.<ext> path below is the same download, kept as an
+    alias for links handed out earlier.
+
+    NOTE: not under @router — create_app registers this LAST, after every
+    router, so dotted literals like /llms.txt keep their exact-route
+    precedence and nothing else gets shadowed.
+    """
+    file_id = resolve_short_code(code)
+    if not file_id:
+        raise HTTPException(404, "Not found")
+    found = public_file_by_id(file_id)
+    if found is None:
+        raise HTTPException(404, "Not found")
+    dirname, meta = found
+    path = payload_path(file_id, dirname, meta.get("ext", ""))
+    ctype = meta.get("content_type") if preview else None
+    return stream_download(
+        request,
+        path,
+        meta.get("filename", file_id),
+        inline=preview,
+        content_type=ctype,
+        cache=True,
     )
 

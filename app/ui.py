@@ -18,6 +18,8 @@ from .i18n import EN, ZH, other, t
 MDUI_CSS = "https://unpkg.com/mdui@2/mdui.css"
 MDUI_JS = "https://unpkg.com/mdui@2/mdui.global.js"
 ICON_FONT = "https://fonts.googleapis.com/icon?family=Material+Icons"
+# Site default font: Noto Sans (TC glyphs for Chinese, Latin from Noto Sans).
+TEXT_FONT = "https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;700&family=Noto+Sans+TC:wght@400;500;700&display=swap"
 
 # Runs inline in <head>, before anything paints, so a Chinese browser never
 # sees a flash of English. Reads navigator.languages (any zh variant that
@@ -132,6 +134,7 @@ def page(
 {LANG_SCRIPT}
 <link rel="stylesheet" href="{MDUI_CSS}">
 <link rel="stylesheet" href="{ICON_FONT}">
+<link rel="stylesheet" href="{TEXT_FONT}">
 <link rel="stylesheet" href="/static/app.css">
 <script src="{MDUI_JS}"></script>
 {extra_head}
@@ -238,11 +241,9 @@ def endpoint_card(lang: str, method: str, path: str, desc: str, href: str | None
     )
 
 
-def _meta_line(f: dict, with_type: bool = True) -> str:
-    """`652 B · content type · 2026-09-28 16:58 · free-text description`."""
+def _meta_line(f: dict) -> str:
+    """`652 B · 2026-09-28 16:58 · free-text description` (no MIME noise)."""
     bits = [fmt_size(f.get("bytes", f.get("size", 0)) if "bytes" in f else f.get("size", 0))]
-    if with_type and f.get("content_type"):
-        bits.append(str(f["content_type"]))
     bits.append(fmt_time(f.get("ctime", 0)))
     desc = str(f.get("description", "") or "")
     if desc:
@@ -332,7 +333,7 @@ def private_file_rows(
             ">"
             '<mdui-icon slot="icon" name="description"></mdui-icon>'
             f'<div><div class="fname">{html.escape(f["name"])}</div>'
-            f'<div class="fmeta">{_meta_line(f, with_type=False)}</div></div>'
+            f'<div class="fmeta">{_meta_line(f)}</div></div>'
             + _row_buttons(lang, f, dl, pv, t(lang, "btn_direct_link"))
             + rename
             + f'<mdui-button slot="end-icon" variant="text" data-delete="{html.escape(del_url)}"'
@@ -365,7 +366,7 @@ def share_file_rows(lang: str, files: list[dict], token: str, base: str) -> str:
             "<mdui-list-item>"
             '<mdui-icon slot="icon" name="description"></mdui-icon>'
             f'<div><div class="fname">{html.escape(f["name"])}</div>'
-            f'<div class="fmeta">{_meta_line(f, with_type=False)}</div></div>'
+            f'<div class="fmeta">{_meta_line(f)}</div></div>'
             + _row_buttons(lang, f, dl, f"{dl}?preview=1", t(lang, "btn_copy_link"))
             + "</mdui-list-item>"
         )

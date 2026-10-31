@@ -65,6 +65,16 @@ def create_app() -> FastAPI:
     app.include_router(system.router)
     app.include_router(docs.router)
 
+    # Root-level short links last: /<code>.<ext> is a valid download URL but
+    # every dotted literal (/llms.txt, …) must keep its exact-route
+    # precedence. Non-hex stems (favicon.ico, robots.txt) 404 in the resolver.
+    app.get("/{code}.{ext}")(public_api.short_link)
+
+    async def _short_no_ext(request: Request, code: str, preview: bool = False):
+        return await public_api.short_link(request, code, "", preview)
+
+    app.get("/{code}")(_short_no_ext)
+
     @app.exception_handler(404)
     async def not_found(request: Request, _exc: Exception):
         if wants_html(request):

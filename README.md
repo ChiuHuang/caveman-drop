@@ -19,7 +19,13 @@
 - **整包下載**：資料夾可串流下載成 `.zip`（`/zip/f/{id}` 公開、`/zip/{id}` 私人），
   邊打包邊傳、不落地。**從網址上傳**：`POST /api/public/upload_url` 讓伺服器透過
   `PROXY_BASE_URL` 抓回 URL；匿名限速 60 Mbps、登入無限。
-- 短網址（`short_url`）預設指向 `USERCONTENT_HOST`（`usercontent.qiuhuang.dev`）。
+- **資料夾權限**：公開資料夾建立時可設 `perm`——`readonly`（只能看）、`upload`
+  （投遞箱）、`both`（預設全開）；用瀏覽器建立時資料夾綁到該 session，建立者
+  不用登入即可改名／改權限／刪除。私人資料夾分享連結也分 `view` / `upload` /
+  `both` 三種。
+- 短網址（`short_url`）預設指向 `USERCONTENT_HOST`（`usercontent.qiuhuang.dev`），
+  直接落在根路徑：`https://usercontent.qiuhuang.dev/<code>.<ext>`（無
+  `/usercontent/` 前綴；舊路徑照舊轉接）。
 
 ## 快速開始
 
@@ -114,7 +120,7 @@ cookie session 在那條路上無效。只在 HTTPS 生效、密碼不會被回�
 刪掉最後一個引用時才會真的刪位元組。舊的 UUID 檔案 id 仍可下載。
 
 分享連結有兩種：完整直連（`/dl/s/<sha256>`）與 **短網址**
-`/usercontent/<6碼>.<ext>`——取 sha256 最短的唯一前綴，撞到別的檔案就自動
+`/<6碼>.<ext>`——取 sha256 最短的唯一前綴，撞到別的檔案就自動
 加長到 7、8 碼…，並帶 `Cache-Control: immutable`，網址永不失效，直接丟給
 Cloudflare 快取即可（`usercontent.qiuhuang.dev` 指向同一台機器的那個路徑）。
 上傳也可以帶自由文字說明：`description`（表單欄位或 merge 的 JSON key）。

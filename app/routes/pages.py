@@ -8,6 +8,7 @@ no public upload affordances are shown.
 from __future__ import annotations
 
 import html
+import os
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
@@ -19,8 +20,10 @@ from ..storage import (
     get_shares,
     private_files,
     public_files,
+    public_folder_dir,
     public_folder_files,
     public_folder_list,
+    public_folder_meta,
     public_folder_name,
     short_code,
 )
@@ -28,6 +31,7 @@ from ..i18n import lang_for, t
 from ..ui import drive_panel, file_rows, page, public_upload_form
 from ..auth import authed
 from ..urls import base_url, private_only
+from .public_api import _folder_gate
 
 router = APIRouter()
 
@@ -273,34 +277,70 @@ async def upload_page(request: Request):
 
 
 def _folder_html(request: Request, folder_id: str) -> HTMLResponse | None:
-    import os as _os
-
-    from ..storage import public_folder_dir
-
-    if not _os.path.isdir(public_folder_dir(folder_id)):
+    if not os.path.isdir(public_folder_dir(folder_id)):
         return None
+    gate = _folder_gate(request, folder_id)
     base = base_url(request)
     lang = lang_for(request)
     is_signed_in = authed(request)
-    files = public_folder_files(folder_id)
+    can_read = gate["can_read"]
+    can_upload = gate["can_upload"]
+    owned = gate["owned"]
+    files = public_folder_files(folder_id) if can_read else []
     for f in files:
         f["download_url"] = f"{base}/dl/pub/{folder_id}/{f['id']}"
-        f["short_url"] = f"{base}/usercontent/{short_code(f['id'])}{f.get('ext', '')}"
+        f["short_url"] = f"{base}/{short_code(f['id'])}{f.get('ext', '')}"
     rows = file_rows(lang, files, folder_id, base)
     title = public_folder_name(folder_id) or t(lang, "unnamed_folder")
-    if is_signed_in:
-        add_card = f"""
+    perm_bits = {
+        "readonly": t(lang, "perm_readonly"),
+        "upload": t(lang, "perm_upload"),
+        "both": t(lang, "perm_both"),
+    }
+    this_perm = perm_bits.get(gate["perm"], gate["perm"])
+    manage = ""
+    if owned:
+        # The permission switcher stays tucked away behind the share button;
+        # pressing it unfolds the list of what non-owners may do.
+        manage = (
+            '<div class="perm-row">'
+            f'<mdui-button variant="outlined" icon="share" data-perm-toggle>'
+            f'{html.escape(t(lang, "btn_share"))}</mdui-button>'
+            '<div data-perm-row hidden>'
+            f'<span class="muted">{html.escape(t(lang, "perm_mine"))}</span>'
+            + "".join(
+                f'<mdui-button variant="{"filled" if gate["perm"] == p else "text"}"'
+                f' data-perm-set="{p}" data-folder="{html.escape(folder_id)}"'
+                f' data-name="{html.escape(title)}">{html.escape(label)}</mdui-button>'
+                for p, label in perm_bits.items()
+            )
+            + "</div>"
+            "</div>"
+        )
+    body_cards = []
+    if can_read:
+        body_cards.append(
+            f"""
           <mdui-card variant="outlined" class="card-pad">
-            <h2>{html.escape(t(lang, "add_here_h"))}</h2>
-            <p class="muted">{html.escape(t(lang, "private_mode_note"))}</p>
-            <a href="/logout"><mdui-button variant="outlined">{html.escape(t(lang, "signout_first"))}</mdui-button></a>
+            <h2>{html.escape(t(lang, "files_h", n=len(files)))}</h2>
+            {rows}
           </mdui-card>"""
-    else:
-        add_card = f"""
+        )
+    if can_upload:
+        body_cards.append(
+            f"""
           <mdui-card variant="outlined" class="card-pad">
             <h2>{html.escape(t(lang, "add_here_h"))}</h2>
             {public_upload_form(lang, folder_id)}
           </mdui-card>"""
+        )
+    zip_btn = (
+        f'<a href="{base}/zip/f/{folder_id}"><mdui-button variant="text" icon="archive">'
+        f'{html.escape(t(lang, "btn_zip"))}</mdui-button></a>'
+        if can_read
+        else ""
+    )
+    perm_prefix = t(lang, "perm_note_prefix")
     body = page(
         title,
         f"""
@@ -308,14 +348,12 @@ def _folder_html(request: Request, folder_id: str) -> HTMLResponse | None:
           <h1>{html.escape(title)}</h1>
           <p>{html.escape(t(lang, "folder_public", n=len(files)))}
           <mdui-button variant="text" data-copy="{base}/f/{folder_id}">{html.escape(t(lang, "copy_share"))}</mdui-button>
-          <a href="{base}/zip/f/{folder_id}"><mdui-button variant="text" icon="archive">{html.escape(t(lang, "btn_zip"))}</mdui-button></a></p>
+          {zip_btn}</p>
+          {manage}
+          <p class="muted" data-perm-note data-prefix="{html.escape(perm_prefix)}">{html.escape(perm_prefix + this_perm)}</p>
         </mdui-card>
         <div class="stack">
-          <mdui-card variant="outlined" class="card-pad">
-            <h2>{html.escape(t(lang, "files_h", n=len(files)))}</h2>
-            {rows}
-          </mdui-card>
-          {add_card}
+          {"".join(body_cards)}
         </div>""",
         active="upload",
         authed=is_signed_in,
@@ -325,28 +363,30 @@ def _folder_html(request: Request, folder_id: str) -> HTMLResponse | None:
 
 
 def _folder_text(request: Request, folder_id: str) -> PlainTextResponse:
-    import os as _os
-
-    from ..storage import public_folder_dir
-
-    if not _os.path.isdir(public_folder_dir(folder_id)):
+    if not os.path.isdir(public_folder_dir(folder_id)):
         return PlainTextResponse("Folder not found.", status_code=404)
+    gate = _folder_gate(request, folder_id)
+    can_read = gate["can_read"]
+    can_upload = gate["can_upload"]
     base = base_url(request)
-    files = public_folder_files(folder_id)
+    perm_word = {"readonly": "read-only", "upload": "upload-only", "both": "read + upload"}[gate["perm"]]
+    files = public_folder_files(folder_id) if can_read else []
     lines = [
         "CaveMan Drop public folder",
         f"folder_id: {folder_id}",
         f"folder_url: {base}/f/{folder_id}",
-        f"upload_url: {base}/f/{folder_id}",
-        f"api_url: {base}/api/public/folder/{folder_id}",
-        "",
-        "Anyone with this folder ID can add a file through the public upload API.",
-        f"Upload: curl -F file=@example.bin -F folder={folder_id} {base}/api/public/upload",
-        "",
-        f"Files: {len(files)}",
+        f"perm: {perm_word}",
     ]
+    if can_upload:
+        lines += [
+            f"upload_url: {base}/f/{folder_id}",
+            "",
+            "Anyone with this folder ID can add a file through the public upload API.",
+            f"Upload: curl -F file=@example.bin -F folder={folder_id} {base}/api/public/upload",
+        ]
+    lines += ["", f"Files: {len(files)}"]
     if not files:
-        lines.append("  No files in this folder.")
+        lines.append("  No files in this folder." if can_read else "  (This folder is upload-only.)")
     else:
         for f in files:
             lines += [

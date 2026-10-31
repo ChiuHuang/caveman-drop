@@ -13,7 +13,7 @@ Responses carry `deduplicated: true` when those bytes were already stored.
 
 ## Short links (for a CDN)
 
-`GET /usercontent/{code}.{ext}` — `code` is the **shortest unique prefix** of
+`GET /{code}.{ext}` — `code` is the **shortest unique prefix** of
 the sha256: usually 6 characters (catbox style), automatically 7, 8 … if
 another file starts with the same characters. Responses carry
 `Cache-Control: public, max-age=31536000, immutable`, so the link never expires
@@ -26,7 +26,7 @@ the short codes cannot be used to probe for them.
 ```json
 {
   "file_id": "f127ca62682b836ac65639814a83d44ce2ff4008209605cb39e444afd6fa2923",
-  "short_url": "https://usercontent.qiuhuang.dev/usercontent/f127ca.pdf",
+  "short_url": "https://usercontent.qiuhuang.dev/f127ca.pdf",
   "download_url": "https://file.chiuhuang.dev/dl/s/f127ca…"
 }
 ```
@@ -72,9 +72,13 @@ link inside keep working.
 
 ### `POST /api/public/folder`
 
-Create an empty folder (optional JSON `name`, free text — folder only, no
-upload). Returns `folder_id`, `folder_name`, `folder_url`, `upload_url`,
-`folder_api_url`.
+Create an empty folder (optional JSON `name`, and `perm` for what non-owners
+may do: `readonly` = list + download, `upload` = dropbox, `both` = the default,
+everything open). Created from a browser, the folder is **assigned to that
+session**: its creator can rename it (`/api/public/folder/rename`), change the
+permission (`/api/public/folder/perm`), or delete it (`/delpubdir/{folder_id}`)
+without signing in. Returns `folder_id`, `folder_name`, `folder_url`,
+`upload_url`, `folder_api_url`.
 
 ### `GET /api/public/folder/{folder_id}`
 
@@ -112,6 +116,16 @@ response has the same shape as `/api/public/upload`.
 
 The zip is **streamed live**: built in memory step by step, never written to
 disk. Flat (no subdirectories); duplicate names get a ` (1)`-style suffix.
+The public zip follows the folder's `perm`: an upload-only folder zips with a
+403.
+
+### Private folders as share links (`/s/{token}`)
+
+- `POST /api/folders/{folder_id}/share` — body `{"mode": "view" | "upload" |
+  "both"}` (omit it to use the folder's `perm`). Returns the `/s/{token}` URL.
+- `view` = list + download; `upload` = anonymous dropbox (contents stay
+  hidden); `both` = everything. `POST /api/folders` takes a `perm` to set the
+  default, and `POST /api/folders/perm` changes it.
 
 ## Clients behind a proxy: `?auth=`
 
@@ -140,12 +154,13 @@ curl -F file=@big.iso "https://proxy.example/https://this.host/api/upload_chunk?
 | `GET` | `/api/files` | Private file list (JSON; browsers get HTML) |
 | `POST` | `/api/upload_chunk` | Fields: `file_chunk`, `upload_id`, `index`, `filename` |
 | `POST` | `/api/merge_chunks` | JSON: `upload_id`, `filename`, `total_chunks`, optional `folder_id` |
-| `POST` | `/api/folders` | JSON `name` — new folder in the drive |
+| `POST` | `/api/folders` | JSON `name`, optional `perm` (view / upload / both) — new folder in the drive |
 | `POST` | `/api/folders/rename` | JSON `folder_id`, `name` — rename; id, files and share links stay |
+| `POST` | `/api/folders/perm` | JSON `folder_id`, `perm` (`view` / `upload` / `both`) — default share-link mode |
 | `GET` | `/api/folders` | Folder list with file counts |
 | `GET`/`POST` | `/deldir/{folder_id}` | Delete a private folder and its files |
 | `GET` | `/?folder={folder_id}` | The drive view: rows, breadcrumb, drop targets |
-| `POST` | `/api/folders/{id}/share` | JSON `mode` (`view` / `upload`) — a no-login share link |
+| `POST` | `/api/folders/{id}/share` | JSON `mode` (`view` / `upload` / `both`, default = the folder's perm) — a no-login share link |
 | `POST` | `/api/share/revoke` | JSON `token` — revoke a share |
 | `GET` | `/s/{token}` | Shared folder page (browser UI / plain text) |
 | `POST` | `/api/share/merge_chunks` | JSON `upload_id`, `filename`, `total_chunks`, `token` — upload via a share link |
@@ -156,9 +171,10 @@ curl -F file=@big.iso "https://proxy.example/https://this.host/api/upload_chunk?
 | `POST` | `/api/files/rename` | JSON `file_id`, `name` — rename a file; id and bytes stay |
 | `POST` | `/api/files/move` | JSON `file_id`, `folder_id`, `from_folder_id` — drag and drop move |
 | `POST` | `/api/public/file/rename` | Same, for a public file; add `folder_id` |
-| `POST` | `/api/public/folder/rename` | JSON `folder_id`, `name` — rename a public folder; the URL stays |
+| `POST` | `/api/public/folder/rename` | JSON `folder_id`, `name` — rename a public folder; the URL stays. Also the creating session's right |
+| `POST` | `/api/public/folder/perm` | JSON `folder_id`, `perm` (`readonly` / `upload` / `both`) — what non-owners may do |
 | `POST` | `/api/public/move` | Same body as the private move |
-| `POST` | `/delpub/{file_id}`, `/delpubdir/{folder_id}` | Remove from every public folder |
+| `POST` | `/delpub/{file_id}`, `/delpubdir/{folder_id}` | Remove from every public folder (admin or the owner session) |
 | `GET/POST` | `/m/{token}` | Single-file phone upload (iPhone Shortcuts compatible) |
 | `GET/POST` | `/login`, `GET /logout` | Password session |
 

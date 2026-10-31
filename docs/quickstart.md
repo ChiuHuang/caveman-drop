@@ -13,7 +13,7 @@ curl -F file=@photo.jpg http://localhost:20042/api/public/upload
   "success": true,
   "file_id": "…64 碼 sha256…",
   "deduplicated": false,
-  "short_url": "https://usercontent.qiuhuang.dev/usercontent/f127ca.jpg",
+  "short_url": "https://usercontent.qiuhuang.dev/f127ca.jpg",
   "download_url": "http://localhost:20042/dl/s/…"
 }
 ```

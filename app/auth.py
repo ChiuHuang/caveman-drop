@@ -23,6 +23,7 @@ from .config import settings
 from .negotiation import wants_html
 from .storage import client_ip
 from .urls import is_https
+from uuid import uuid4
 
 AUTH_MAX_FAILS = 10
 AUTH_FAIL_WINDOW = 600.0
@@ -63,6 +64,20 @@ def query_auth_ok(request: Request, raising: bool = True) -> bool:
         return True
     _note_failure(ip)
     return False
+
+
+def session_sid(request: Request) -> str:
+    """Stable per-browser id, stored in the signed session cookie.
+
+    The first call assigns it; from then on the browser keeps the cookie and
+    the id outlives server restarts (the signing key is on disk). Browsers
+    only — curl scripts that ignore cookies get a fresh id every call.
+    """
+    sid = request.session.get("sid")
+    if not sid:
+        sid = uuid4().hex
+        request.session["sid"] = sid
+    return sid
 
 
 def authed(request: Request) -> bool:

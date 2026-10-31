@@ -217,6 +217,15 @@ assert ucr.status_code == 206 and ucr.content == b"hi caveman"[2:6], (ucr.status
 assert c.get("/usercontent/ffffff", headers=J).status_code == 404
 assert c.get("/usercontent/zz", headers=J).status_code == 404
 assert c.get(f"/usercontent/{fid}", headers=J).content == b"hi caveman"  # full id works too
+# short links live at the root of the host now: /<code>.<ext> (the /usercontent/
+# path above stays as an alias for links handed out earlier)
+rt = c.get(f"/{code}.txt", headers=J)
+assert rt.status_code == 200 and rt.content == b"hi caveman", rt.status_code
+assert "attachment" in rt.headers["content-disposition"]
+assert rt.headers["cache-control"] == "public, max-age=31536000, immutable"
+assert c.get(f"/{code}", headers=J).content == b"hi caveman"
+assert c.get("/favicon.ico", headers=J).status_code == 404, "non-hex stems must 404"
+assert c.get("/robots.txt", headers=J).status_code == 404
 # a 6-char clash between two different files pushes the newcomer to 7 chars
 fake = {"codes": {}, "hashes": {}}
 import app.storage as _st2
@@ -245,7 +254,8 @@ dfid = desc_up.json()["file_id"]
 dm = c.get(f"/api/public/single/{dfid}", headers=J)
 assert dm.json()["description"] == "週會記錄 2026-09-28"
 dshort = dm.json()["short_url"]
-assert dshort.endswith(".txt") and "/usercontent/" in dshort, dshort
+assert dshort.endswith(".txt") and "usercontent.qiuhuang.dev/" in dshort
+assert "/usercontent/" not in dshort, dshort
 assert c.get(dshort.replace("http://testserver", ""), headers=J).content == b"described bytes"
 # control characters stripped, long text capped
 d2 = c.post("/api/public/upload", headers=J, files={"file": ("n2.txt", b"two")},
@@ -279,7 +289,7 @@ assert zc.status_code == 200 and zc.content[:2] == b"PK", "public zip must be a 
 assert b"j.txt" in zc.content
 assert "attachment" in zc.headers["content-disposition"], zc.headers.get("content-disposition")
 f2b = c.post("/api/public/upload", headers=J, files={"file": ("j.txt", b"dup!")}, data={"folder": folder})
-assert f2b.json()["short_url"].startswith("https://usercontent.qiuhuang.dev/usercontent/"), \
+assert f2b.json()["short_url"].startswith("https://usercontent.qiuhuang.dev/") and "/usercontent/" not in f2b.json()["short_url"], \
     f2b.json().get("short_url")
 print("public zip + short_url host OK")
 
@@ -287,6 +297,56 @@ h = c.get(f"/f/{folder}", headers=B)
 assert "Public folder" in h.text and "Add files to this folder" in h.text
 assert "派對" in h.text and "<code>" not in h.text
 print("share page OK")
+
+# --- folder ownership + perms: readonly / upload-only / both, session-owned ---
+own = TestClient(app)   # fresh browser-ish session, never logged in, keeps cookies
+OW = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0) Chrome/120",
+      "Origin": "https://x.dev", "Accept": "*/*"}
+pf = own.post("/api/public/folder", headers=OW, json={"name": "家人", "perm": "readonly"})
+assert pf.status_code == 200 and pf.json()["perm"] == "readonly", pf.text
+assert pf.json()["owned"] is True
+perm_ro = pf.json()["folder_id"]
+# the owner session can always write; an outsider cannot
+own_up = own.post("/api/public/upload", headers=OW,
+                  files={"file": ("own.txt", b"family")}, data={"folder": perm_ro})
+assert own_up.status_code == 200, own_up.text
+no_up = anon2.post("/api/public/upload", headers=J,
+                   files={"file": ("bad.txt", b"net")}, data={"folder": perm_ro})
+assert no_up.status_code == 403, no_up.status_code
+no_url = anon2.post("/api/public/upload_url", headers=J,
+                    json={"url": "https://example.invalid/x.bin", "folder": perm_ro})
+assert no_url.status_code == 403
+# reading a readonly folder stays open to everyone
+g = anon2.get(f"/api/public/folder/{perm_ro}", headers=J)
+assert g.status_code == 200 and g.json()["perm"] == "readonly"
+dl_ro = anon2.get(f"/dl/pub/{perm_ro}/{own_up.json()['file_id']}", headers=J)
+assert dl_ro.status_code == 200 and dl_ro.content == b"family"
+# only the owner session manages it — rename / perm / delete, no login
+rn = own.post("/api/public/folder/rename", headers=OW,
+              json={"folder_id": perm_ro, "name": "家人2"})
+assert rn.status_code == 200, rn.text
+assert anon2.post("/api/public/folder/rename", headers=J,
+                  json={"folder_id": perm_ro, "name": "x"}).status_code == 401
+assert anon2.post(f"/delpubdir/{perm_ro}", headers=J).status_code == 401
+# upload-only: outsiders may drop files but cannot read or list
+pc = own.post("/api/public/folder/perm", headers=OW,
+              json={"folder_id": perm_ro, "perm": "upload"})
+assert pc.status_code == 200 and pc.json()["perm"] == "upload"
+up2 = anon2.post("/api/public/upload", headers=J,
+                 files={"file": ("drop.txt", b"give")}, data={"folder": perm_ro})
+assert up2.status_code == 200
+assert anon2.get(f"/api/public/folder/{perm_ro}", headers=J).status_code == 403
+assert anon2.get(f"/dl/pub/{perm_ro}/{own_up.json()['file_id']}", headers=J).status_code == 403
+assert anon2.get(f"/zip/f/{perm_ro}", headers=J).status_code == 403
+# back to both
+assert own.post("/api/public/folder/perm", headers=OW,
+                json={"folder_id": perm_ro, "perm": "both"}).json()["perm"] == "both"
+assert anon2.get(f"/api/public/folder/{perm_ro}", headers=J).status_code == 200
+# the owner sees the permission switcher on the folder page; then deletes it
+fh = own.get(f"/f/{perm_ro}", headers=B)
+assert "data-perm-set" in fh.text, "owner must see the perm switcher"
+assert own.post(f"/delpubdir/{perm_ro}", headers=OW).status_code == 200
+print("public folder perms + session ownership OK")
 
 # --- public 16-thread chunked upload (everyone, no login) ---
 puid = str(uuid.uuid4())
@@ -438,6 +498,27 @@ r = c.post("/login", headers=J, data={"password": "passw"})
 assert r.status_code == 200
 print("login OK")
 
+# --- private folders: share links get view / upload / both ---
+mkdir = c.post("/api/folders", headers=J, json={"name": "兩可", "perm": "both"})
+assert mkdir.status_code == 200 and mkdir.json()["perm"] == "both", mkdir.text
+pboth = mkdir.json()["folder_id"]
+sh_def = c.post(f"/api/folders/{pboth}/share", headers=J, json={})
+assert sh_def.status_code == 200 and sh_def.json()["mode"] == "both", sh_def.text
+both_page = anon2.get(f"/s/{sh_def.json()['token']}", headers=B)
+assert "/api/share/merge_chunks" in both_page.text, "both-mode link must allow uploads"
+# a view-only link forbids uploads (mode is checked before anything else)
+sh_v = c.post(f"/api/folders/{pboth}/share", headers=J, json={"mode": "view"})
+assert sh_v.status_code == 200
+mv = anon2.post("/api/share/merge_chunks", headers=J,
+                json={"upload_id": "x", "filename": "a.txt", "total_chunks": 1,
+                      "token": sh_v.json()["token"]})
+assert mv.status_code == 403, mv.status_code
+mv = anon2.post("/api/share/merge_chunks", headers=J,
+                json={"upload_id": "x", "filename": "a.txt", "total_chunks": 1,
+                      "token": "no-such-token"})
+assert mv.status_code == 404
+print("private share modes (view / upload / both) OK")
+
 r = c.get("/", headers=B)
 assert "My drive" in r.text and "data-chunked" in r.text
 assert "data-drive" in r.text
@@ -488,9 +569,11 @@ assert r.status_code == 303, "logged-in /upload should redirect to /"
 print("logged-in /upload redirect OK")
 
 h = c.get(f"/f/{folder}", headers=B)
-assert "data-chunked" not in h.text, "no upload form on the public folder page when signed in"
-assert "Sign out to upload" in h.text
-print("folder page hides upload form when logged in OK")
+# Signed-in users may use the public-folder upload form directly (session
+# ownership made the old sign-out-first card contradictory — it is gone).
+assert "data-chunked" in h.text, "upload form on the public folder page when signed in"
+assert "Sign out to upload" not in h.text
+print("folder page shows upload form when logged in OK")
 
 # --- 16-thread style chunked upload (sequential here, same endpoints) ---
 uid = str(uuid.uuid4())
@@ -641,8 +724,11 @@ assert bad.status_code == 403, "view-only link must not upload"
 good = c.post("/api/share/merge_chunks", headers=J,
               json={"upload_id": uid3, "filename": "s.txt", "total_chunks": 1, "token": utok})
 assert good.status_code == 200
-sd = c.get(f"/dl/sh/{utok}/{good.json()['file_id']}", headers=J)
-assert sd.content == b"shared"
+# upload-only links are dropboxes: no downloads through them, by design
+assert c.get(f"/dl/sh/{utok}/{good.json()['file_id']}", headers=J).status_code == 403
+# the same folder's view link lists and downloads it fine
+sd = c.get(f"/dl/sh/{vtok}/{good.json()['file_id']}", headers=J)
+assert sd.status_code == 200 and sd.content == b"shared", (sd.status_code, sd.content)
 
 rv = c.post("/api/share/revoke", headers=J, json={"token": vtok})
 assert rv.status_code == 200

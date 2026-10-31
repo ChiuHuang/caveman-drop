@@ -43,6 +43,9 @@
       rename: "改名", renameOk: "已改名", renameFail: "改名失敗", newFolder: "新增資料夾",
       save: "儲存", cancel: "取消", nameLabel: "名稱", driveTitle: "我的雲端",
       urlNeed: "請先輸入檔案網址", urlFail: "從網址上傳失敗：", urlUp: "從網址上傳",
+      permPick: "非擁有者的權限", permReadonly: "只能讀取", permUpload: "只能上傳",
+      permBoth: "讀取＋上傳", sharePick: "分享連結的權限", permOk: "已更新權限",
+      shareMode: "分享連結",
     },
     en: {
       copied: "Link copied", copyFail: "Copy failed", needFile: "Pick a file first",
@@ -74,6 +77,9 @@
       rename: "Rename", renameOk: "Renamed", renameFail: "Rename failed", newFolder: "New folder",
       save: "Save", cancel: "Cancel", nameLabel: "Name", driveTitle: "My drive",
       urlNeed: "Enter a file URL first", urlFail: "URL upload failed: ", urlUp: "URL upload",
+      permPick: "Permission for others", permReadonly: "Read only", permUpload: "Upload only",
+      permBoth: "Read + upload", sharePick: "Link access", permOk: "Permission updated",
+      shareMode: "Share link",
     },
   };
   const S = T[LANG === "zh-TW" ? "zh" : "en"];
@@ -180,9 +186,8 @@
     const p = (x) => String(x).padStart(2, "0");
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
   }
-  function metaLine(f, withType) {
+  function metaLine(f) {
     const bits = [fmtMB(f.bytes != null ? f.bytes : f.size || 0)];
-    if (withType && f.content_type) bits.push(f.content_type);
     const t2 = fmtTime(f.ctime);
     if (t2) bits.push(t2);
     if (f.description) bits.push(f.description);
@@ -204,7 +209,7 @@
       ` data-sort-size="${esc(String(f.bytes || 0))}" data-sort-time="${esc(String(f.ctime || 0))}">` +
       '<mdui-icon slot="icon" name="description"></mdui-icon>' +
       `<div><div class="fname">${esc(f.name)}</div>` +
-      `<div class="fmeta">${esc(metaLine(f, !pub))}</div></div>` +
+      `<div class="fmeta">${esc(metaLine(f))}</div></div>` +
       `<mdui-button-icon slot="end-icon" icon="visibility" data-preview="${esc(pv)}"` +
       ` data-name="${esc(f.name)}" title="${esc(S.preview)}"></mdui-button-icon>` +
       `<mdui-button-icon slot="end-icon" icon="download" data-mt-download="${esc(dl)}"` +
@@ -693,6 +698,61 @@
     });
   }
 
+  // ---- 權限：readonly / upload / both 三選一的小對話框 ----
+  // askPermHead 帶名稱欄（建資料夾）；askPermOpt 只有權限（分享連結）。
+  const PERMOPTS = () => [
+    ["readonly", S.permReadonly],
+    ["upload", S.permUpload],
+    ["both", S.permBoth],
+  ];
+
+  function askPermOpt(headline, pick, current, modeLabels) {
+    // modeLabels: 選配，傳入時用 view/upload/both 三個選項（私人分享用）
+    const opts = modeLabels || PERMOPTS();
+    return new Promise((resolve) => {
+      const dlg = document.createElement("mdui-dialog");
+      dlg.setAttribute("headline", headline);
+      const bits = opts.map((o) =>
+        `<mdui-button variant="${current === o[0] ? "filled" : "text"}" data-val="${o[0]}">${esc(o[1])}</mdui-button>`
+      ).join("");
+      dlg.innerHTML = `<p class="muted" style="margin:4px 0 8px">${esc(pick)}</p>
+        <div class="perm-row" style="display:flex;gap:4px;flex-wrap:wrap">${bits}</div>
+        <mdui-button slot="action" variant="text" data-no>${esc(S.cancel)}</mdui-button>
+        <mdui-button slot="action" variant="filled" data-yes>${esc(S.save)}</mdui-button>`;
+      document.body.appendChild(dlg);
+      let val = current || opts[0][0];
+      let settled = false;
+      const done = (v) => {
+        if (settled) return;
+        settled = true;
+        dlg.open = false;
+        setTimeout(() => dlg.remove(), 300);
+        resolve(v);
+      };
+      dlg.querySelectorAll("[data-val]").forEach((b) => {
+        b.addEventListener("click", () => {
+          val = b.getAttribute("data-val");
+          dlg.querySelectorAll("[data-val]").forEach((x) => {
+            x.variant = x === b ? "filled" : "text";
+          });
+        });
+      });
+      dlg.querySelector("[data-no]").addEventListener("click", () => done(null));
+      dlg.querySelector("[data-yes]").addEventListener("click", () => done(val));
+      dlg.addEventListener("closed", () => done(null));
+      dlg.open = true;
+    });
+  }
+
+  async function askNamePerm(headline, value) {
+    // 先問名稱（原 askName），再問權限；任一步取消即整個取消
+    const name = await askName(headline, value);
+    if (!name) return null;
+    const perm = await askPermOpt(headline, S.permPick, "both");
+    if (!perm) return null;
+    return { name, perm };
+  }
+
   async function postJSON(url, body) {
     const res = await fetch(url, {
       method: "POST",
@@ -1018,11 +1078,11 @@
     // 雲端工具列：新增資料夾 → 就地插入列，不 reload
     document.querySelectorAll("[data-new-folder]").forEach((btn) => {
       btn.addEventListener("click", async () => {
-        const name = await askName(S.newFolder, "");
-        if (!name) return;
+        const got = await askNamePerm(S.newFolder, "");
+        if (!got) return;
         try {
-          const data = await postJSON("/api/folders", { name });
-          insertRow(folderRowHtml(data.folder_id, data.name || name, 0, Date.now() / 1000, false));
+          const data = await postJSON("/api/folders", { name: got.name, perm: got.perm });
+          insertRow(folderRowHtml(data.folder_id, data.name || got.name, 0, Date.now() / 1000, false));
           window.toast(S.mkdirOk);
         } catch { window.toast(S.mkdirFail); }
       });
@@ -1035,10 +1095,13 @@
         try {
           const host = btn.closest(".card-pad") || btn.parentElement;
           const name = host ? fieldValue(host, "mkdir-name") : "";
+          // 建立即問權限（readonly / upload / both）；資料夾會綁到這個瀏覽器
+          const perm = await askPermOpt(name || S.newFolder, S.permPick, "both");
+          if (!perm) { btn.loading = false; return; }
           const res = await fetch("/api/public/folder", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(name ? { name } : {}),
+            body: JSON.stringify({ name, perm }),
           });
           const data = await res.json();
           if (!res.ok) throw new Error(data.detail || "x");
@@ -1116,17 +1179,52 @@
         return;
       }
 
-      // 分享（無列變化，只提示）
+      // 分享：先選連結權限（view / upload / both）再建立
       const sc = hit("[data-share-create]");
       if (sc) {
+        const mode = await askPermOpt(S.shareMode, S.sharePick, sc.getAttribute("data-mode") || "view",
+          [["view", S.shareView || S.permReadonly], ["upload", S.permUpload], ["both", S.permBoth]]);
+        if (!mode) return;
         try {
           const res = await fetch(`/api/folders/${sc.getAttribute("data-share-create")}/share`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ mode: sc.getAttribute("data-mode") || "view" }),
+            body: JSON.stringify({ mode }),
           });
           if (!res.ok) throw new Error("HTTP " + res.status);
+          const data = await res.json().catch(() => ({}));
+          copyText(data.url || "");
           window.toast(S.shareOk);
+        } catch { window.toast(S.mkdirFail); }
+        return;
+      }
+
+      // 分享按鈕：按下才展開資料夾權限清單（擁有者）
+      const pt = hit("[data-perm-toggle]");
+      if (pt) {
+        ev.preventDefault(); ev.stopPropagation();
+        const row = document.querySelector("[data-perm-row]");
+        if (row) row.hidden = !row.hidden;
+        return;
+      }
+
+      // 資料夾擁有者：切換非擁有者的權限（資料夾頁上的管理列）
+      const ps = hit("[data-perm-set]");
+      if (ps) {
+        const perm = ps.getAttribute("data-perm-set");
+        try {
+          await postJSON("/api/public/folder/perm",
+            { folder_id: ps.getAttribute("data-folder"), perm });
+          const row = document.querySelector("[data-perm-row]");
+          if (row) {
+            row.querySelectorAll("[data-perm-set]").forEach((x) => {
+              x.variant = x === ps ? "filled" : "text";
+            });
+            setTimeout(() => { row.hidden = true; }, 800);   // 收合
+          }
+          const note = document.querySelector("[data-perm-note]");
+          if (note) note.textContent = (note.getAttribute("data-prefix") || "") + ps.textContent.trim();
+          window.toast(S.permOk);
         } catch { window.toast(S.mkdirFail); }
         return;
       }

@@ -94,13 +94,16 @@ def _api_payload(request: Request) -> dict:
             },
             "short_download": {
                 "method": "GET",
-                "url": f"{base}/usercontent/{{code}}.{{ext}}",
+                "url": f"{base}/{{code}}.{{ext}}",
                 "notes": (
-                    "catbox-style short link: the shortest unique prefix of the file's sha256, "
-                    "6 characters (7, 8 … when a different file shares those characters). "
-                    "Immutable Cache-Control, so a CDN in front can cache it. Public files only. "
-                    "Returned as `short_url` by every upload and listing response. In the default "
-                    "deployment the host is USERCONTENT_HOST (usercontent.qiuhuang.dev), not this one."
+                    "catbox-style short link at the root: the shortest unique prefix of the "
+                    "file's sha256, 6 characters (7, 8 … when a different file shares those "
+                    "characters). Immutable Cache-Control, so a CDN in front can cache it. "
+                    "Public files only. Returned as `short_url` by every upload and listing "
+                    "response. In the default deployment the host is USERCONTENT_HOST "
+                    "(usercontent.qiuhuang.dev), not this one — so a link reads "
+                    "https://usercontent.qiuhuang.dev/<code>.<ext>. The /usercontent/<code>.<ext> "
+                    "path still works as an alias for links handed out earlier."
                 ),
             },
             "upload_from_url": {
@@ -156,9 +159,20 @@ def _api_payload(request: Request) -> dict:
                 "url": f"{base}/api/public/folder/rename",
                 "body": {"folder_id": "<uuid>", "name": "new display name"},
                 "notes": (
-                    "Admin only (password session, ?auth= or ?token=). Changes a public "
-                    "folder's display name. The folder_id and every existing link keep "
-                    "working."
+                    "Admin only (password session, ?auth= or ?token=) — or the browser "
+                    "session that created the folder. Changes a public folder's display "
+                    "name. The folder_id and every existing link keep working."
+                ),
+            },
+            "folder_perm": {
+                "method": "POST",
+                "url": f"{base}/api/public/folder/perm",
+                "body": {"folder_id": "<uuid>", "perm": "readonly | upload | both"},
+                "notes": (
+                    "Set what non-owners may do with a public folder: readonly (list + "
+                    "download), upload (dropbox), or both (default). Admin, or the "
+                    "session that created the folder. POST /api/public/folder accepts "
+                    "`perm` at creation, and assigns the folder to the creating session."
                 ),
             },
             "private_drive": {
@@ -174,6 +188,18 @@ def _api_payload(request: Request) -> dict:
                 "url": f"{base}/api/folders/rename",
                 "body": {"folder_id": "<uuid>", "name": "new display name"},
                 "notes": "Admin only. Changes a private folder's name; id, files and share links stay.",
+            },
+            "folder_perm_private": {
+                "method": "POST",
+                "url": f"{base}/api/folders/perm",
+                "body": {"folder_id": "<uuid>", "perm": "view | upload | both"},
+                "notes": (
+                    "Admin only. A private folder's default share-link mode. POST "
+                    "/api/folders accepts `perm` at creation; POST /api/folders/{id}/share "
+                    "takes an optional mode (view / upload / both) — defaulting to the "
+                    "folder's — and returns the /s/{token} link. view = list + download, "
+                    "upload = dropbox, both = everything."
+                ),
             },
         },
     }
@@ -191,7 +217,7 @@ async def api_root(request: Request):
             ("GET", "/api/public/folder/{folder_id}", "資料夾資訊、檔案清單與下載網址。", None),
             ("GET", "/api/public/file/{folder_id}/{file_id}", "單一檔案資訊與下載網址。", None),
             ("GET", "/dl/pub/{folder_id}/{file_id}", "下載檔案本體。支援 Range 續傳 / 並行。", None),
-            ("GET", "/usercontent/{code}.{ext}", "短網址：sha256 前綴，immutable，可進 CDN。", None),
+            ("GET", "/{code}.{ext}", "短網址：sha256 前綴，immutable，可進 CDN。", None),
             ("GET", "/api/files", "私人檔案清單（需密碼登入）。", "/login"),
             ("POST", "/api/upload_chunk + /api/merge_chunks", "私人分段上傳（登入後不限速）。", "/login"),
         ]
@@ -202,7 +228,7 @@ async def api_root(request: Request):
             ("GET", "/api/public/folder/{folder_id}", "Folder metadata, file list and download URLs.", None),
             ("GET", "/api/public/file/{folder_id}/{file_id}", "Single file metadata and download URL.", None),
             ("GET", "/dl/pub/{folder_id}/{file_id}", "Download bytes. Supports Range for resume/parallel.", None),
-            ("GET", "/usercontent/{code}.{ext}", "Short link: sha256 prefix, immutable, CDN friendly.", None),
+            ("GET", "/{code}.{ext}", "Short link: sha256 prefix, immutable, CDN friendly.", None),
             ("GET", "/api/files", "Private file list (password required).", "/login"),
             ("POST", "/api/upload_chunk + /api/merge_chunks", "Private chunked upload (unthrottled when signed in).", "/login"),
         ]
@@ -248,11 +274,12 @@ An optional free-text `description` may be sent with the upload
 it is echoed back and shown in listings.
 
 ## Short share links
-GET {base}/usercontent/{{code}}.{{ext}}
+GET {base}/{{code}}.{{ext}}
 `code` is the shortest unique prefix of the file's sha256: 6 characters, or
 7, 8 … if another file starts with the same characters. Served with an
 immutable `Cache-Control`, so a CDN can hold it. Public files only.
-Every response also carries it as `short_url`.
+Every response also carries it as `short_url`. `/usercontent/{{code}}.{{ext}}`
+still works as an alias for links handed out earlier.
 
 Generated links follow the request: an HTTPS request gets HTTPS URLs back
 (`Forwarded` / `X-Forwarded-Proto` are honoured).
@@ -275,8 +302,20 @@ unaffected.
 
 ## Create an empty public folder
 POST {base}/api/public/folder
-Optional JSON `{{"name": "free text"}}`. Returns a folder_id plus `folder_url`,
-`upload_url`, and `folder_api_url`.
+JSON `{{"name": "free text", "perm": "readonly" | "upload" | "both" (both by
+default)}}`. Returns a folder_id plus `folder_url`, `upload_url`, and
+`folder_api_url`. A browser session becomes the folder's owner: it can rename
+(POST /api/public/folder/rename), delete (POST /delpubdir/{{folder_id}}), or
+re-permission (POST /api/public/folder/perm) without logging in. Non-owners
+follow `perm`: readonly = list + download only, upload = dropbox only,
+both = everything (the old behaviour).
+
+## Private folders and share links
+POST {base}/api/folders (JSON `name`, optional `perm`: view / upload / both) —
+the folder's default share mode. POST /api/folders/{{id}}/share (optional
+`mode`, defaulting to that perm) returns a /s/{{token}} link: view links list
+and download, upload links only accept files, both do everything. Requires a
+signed-in session.
 
 ## Chunked upload (browsers + scripts)
 POST {base}/api/public/chunk (multipart: `file_chunk`, `upload_id` (uuid),

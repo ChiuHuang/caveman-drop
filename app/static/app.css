@@ -1,4 +1,14 @@
 :root { color-scheme: light dark; }
+
+/* Site default font: Noto Sans / Noto Sans TC, instead of MDUI's Roboto. */
+:root {
+  --mdui-typescale-font-family: "Noto Sans TC", "Noto Sans", system-ui, sans-serif;
+  --mdui-typescale-body-large-font: "Noto Sans TC", "Noto Sans", system-ui, sans-serif;
+  --mdui-typescale-body-medium-font: "Noto Sans TC", "Noto Sans", system-ui, sans-serif;
+}
+body, input, button, textarea, select {
+  font-family: "Noto Sans TC", "Noto Sans", system-ui, sans-serif;
+}
 /* 藍色主題：覆寫 mdui v2 的 MD3 色票。
    注意兩點：
    1. mdui v2 的色票是「逗號分隔的 RGB 三元組」（rgb(var(--token)) 拼出顏色），

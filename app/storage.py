@@ -782,15 +782,36 @@ def save_private_folders(d: dict) -> None:
         json.dump(d, f, ensure_ascii=False)
 
 
-def create_private_folder(name: str, default_name: str = "") -> tuple[str, dict]:
+def create_private_folder(
+    name: str, default_name: str = "", perm: str = "both"
+) -> tuple[str, dict]:
+    """New private folder. `perm` is the default access mode of its share
+    links: view (list + download), upload (dropbox), or both."""
     import uuid
 
     fid = str(uuid.uuid4())
-    meta = {"name": clean_name(name) or default_name or "folder", "ctime": time.time()}
+    meta = {
+        "name": clean_name(name) or default_name or "folder",
+        "ctime": time.time(),
+        "perm": perm if perm in ("view", "upload", "both") else "both",
+    }
     d = get_private_folders()
     d[fid] = meta
     save_private_folders(d)
     return fid, meta
+
+
+def set_private_folder_perm(fid: str, perm: str) -> str:
+    """Change a private folder's default share-link mode. Returns what stuck."""
+    if perm not in ("view", "upload", "both"):
+        perm = "both"
+    d = get_private_folders()
+    if fid not in d:
+        raise HTTPException(404, "Folder not found")
+    d[fid]["perm"] = perm
+    d[fid]["mtime"] = time.time()
+    save_private_folders(d)
+    return perm
 
 
 def rename_private_folder(fid: str, name: str, default_name: str = "") -> str:
@@ -866,27 +887,73 @@ def clean_name(name: str, limit: int = 64) -> str:
     return re.sub(r"[\x00-\x1f\x7f]", "", str(name or "")).strip()[:limit]
 
 
-def create_public_folder(name: str, default_name: str = "") -> tuple[str, dict[str, Any]]:
-    """Create an empty public folder under a free-text name."""
+def create_public_folder(
+    name: str,
+    default_name: str = "",
+    perm: str = "both",
+    owner: str = "",
+) -> tuple[str, dict[str, Any]]:
+    """Create an empty public folder under a free-text name.
+
+    `perm` is what non-owners may do: readonly (list + download), upload
+    (dropbox), or both. `owner` is the creating browser session's sid; an owned
+    folder can be renamed/deleted/re-permissioned by that session alone.
+    """
     import uuid
 
     fid = str(uuid.uuid4())
     fdir = public_folder_dir(fid)
     os.makedirs(fdir, exist_ok=True)
-    meta = {"name": clean_name(name) or default_name or "folder", "ctime": time.time()}
+    meta = {
+        "name": clean_name(name) or default_name or "folder",
+        "ctime": time.time(),
+        "perm": perm if perm in ("readonly", "upload", "both") else "both",
+    }
+    if owner:
+        meta["owner"] = owner
     with open(os.path.join(fdir, "folder.json"), "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False)
     return fid, meta
 
 
-def resolve_public_folder(ref: str, default_name: str = "") -> str:
-    """A folder_id is used as-is; any other text becomes a new folder's name."""
+def public_folder_meta(folder_id: str) -> dict:
+    """folder.json of a public folder ({} when missing)."""
+    try:
+        with open(os.path.join(public_folder_dir(folder_id), "folder.json"), encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+PERMS = ("readonly", "upload", "both")
+
+
+def set_public_folder_perm(folder_id: str, perm: str) -> str:
+    """Change what non-owners may do with a public folder. Returns what stuck."""
+    if perm not in PERMS:
+        perm = "both"
+    meta = public_folder_meta(folder_id)
+    if not meta:
+        raise HTTPException(404, "Folder not found")
+    meta["perm"] = perm
+    meta["mtime"] = time.time()
+    with open(os.path.join(public_folder_dir(folder_id), "folder.json"), "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False)
+    return perm
+
+
+def resolve_public_folder(
+    ref: str, default_name: str = "", owner: str = "", perm: str = "both"
+) -> str:
+    """A folder_id is used as-is; any other text becomes a new folder's name.
+    Free-text creation assigns the folder to the creating session."""
     ref = str(ref or "").strip()
     if not ref:
         raise HTTPException(400, "Missing folder")
     if PUBLIC_ID_RE.fullmatch(ref):
         return ref
-    return create_public_folder(ref, default_name)[0]
+    return create_public_folder(ref, default_name, perm=perm, owner=owner)[0]
 
 
 def _shares_path() -> str:
@@ -910,8 +977,8 @@ def save_shares(d: dict) -> None:
 def create_share(folder_id: str, mode: str) -> tuple[str, dict]:
     import uuid
 
-    if mode not in ("view", "upload"):
-        raise HTTPException(400, "mode must be view or upload")
+    if mode not in ("view", "upload", "both"):
+        raise HTTPException(400, "mode must be view, upload, or both")
     if folder_id not in get_private_folders():
         raise HTTPException(404, "Folder not found")
     token = str(uuid.uuid4())

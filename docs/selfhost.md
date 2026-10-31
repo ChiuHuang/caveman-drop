@@ -77,7 +77,7 @@ WantedBy=multi-user.target
   `X-Forwarded-Proto` / `X-Forwarded-Host`）。代理沒帶標頭就設
   `PUBLIC_BASE_URL` 釘死網域。
 - 這些標頭會被信任：直連後端埠請用防火牆擋住，或直接設 `PUBLIC_BASE_URL`。
-- 短網址 `/usercontent/<code>.<ext>` 帶 `Cache-Control: immutable`，
+- 短網址 `/<code>.<ext>` 帶 `Cache-Control: immutable`，
   可以單獨指到同一台機器的這個路徑交給 CDN 快取。
 
 ## 儲存與清理

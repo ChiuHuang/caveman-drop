@@ -11,7 +11,7 @@
 
 ## 短網址（CDN 用）
 
-`GET /usercontent/{code}.{ext}` —— `code` 取 sha256 **最短的唯一前綴**：
+`GET /{code}.{ext}` —— `code` 取 sha256 **最短的唯一前綴**：
 一般 6 碼（像 catbox），若另一個檔案前 6 碼相同就自動用 7 碼、8 碼…
 回應帶 `Cache-Control: public, max-age=31536000, immutable`，網址永不失效，
 可以放心丟給 Cloudflare 快取。每個上傳／清單回應都會附 `short_url`。
@@ -21,7 +21,7 @@
 ```json
 {
   "file_id": "f127ca62682b836ac65639814a83d44ce2ff4008209605cb39e444afd6fa2923",
-  "short_url": "https://usercontent.qiuhuang.dev/usercontent/f127ca.pdf",
+  "short_url": "https://usercontent.qiuhuang.dev/f127ca.pdf",
   "download_url": "https://file.chiuhuang.dev/dl/s/f127ca…"
 }
 ```
@@ -64,8 +64,12 @@ curl -X POST https://this.host/api/public/folder/rename \
 
 ### `POST /api/public/folder`
 
-建立空資料夾（選填 JSON `name`，自由文字，只建資料夾不傳檔）。回傳
-`folder_id`、`folder_name`、`folder_url`、`upload_url`、`folder_api_url`。
+建立空資料夾（選填 JSON `name`、`perm`）。`perm` 設非擁有者的權限：
+`readonly`（只能看＋下載）、`upload`（只能丟檔）、`both`（預設，全開）。
+用瀏覽器建立時，資料夾會**綁到這個 session**：建立者不用登入就能
+改名（`/api/public/folder/rename`）、改權限（`/api/public/folder/perm`）、
+刪除（`/delpubdir/{folder_id}`）。回傳 `folder_id`、`folder_name`、
+`folder_url`、`upload_url`、`folder_api_url`。
 
 ### `GET /api/public/folder/{folder_id}`
 
@@ -102,7 +106,16 @@ bytes 照一般公開上傳入庫（`folder` 規則同上）。匿名呼叫限�
 - `GET /zip/{folder_id}`：私人資料夾，需登入。
 
 zip 是**邊打包邊串流**的，伺服器只留一份在記憶體、不寫暫存；無子目錄，
-同名檔自動加 ` (1)` 後綴。
+同名檔自動加 ` (1)` 後綴。公開 zip 受資料夾 `perm` 管：`upload`-only 的
+資料夾不給打包（403）。
+
+### 私人資料夾分享連結（`/s/{token}`）
+
+- `POST /api/folders/{folder_id}/share`：body `{"mode": "view" | "upload" |
+  "both"}`（省略則用建立資料夾時的 `perm`）。回傳 `/s/{token}`。
+- `view` = 列出＋下載；`upload` = 匿名投遞箱（不上傳就看不到內容）；
+  `both` = 兩者。`POST /api/folders` accepts `perm` 設預設值；改預設值用
+  `POST /api/folders/perm`。
 
 ## 經代理的客戶端：`?auth=`
 
@@ -129,12 +142,13 @@ curl -F file=@big.iso "https://proxy.example/https://this.host/api/upload_chunk?
 | `GET` | `/api/files` | 私人檔案清單（JSON；瀏覽器看 HTML） |
 | `POST` | `/api/upload_chunk` | 欄位：`file_chunk`、`upload_id`、`index`、`filename` |
 | `POST` | `/api/merge_chunks` | JSON：`upload_id`、`filename`、`total_chunks`、選填 `folder_id` |
-| `POST` | `/api/folders` | JSON：`name` —— 新增私人雲端資料夾 |
+| `POST` | `/api/folders` | JSON：`name`、選填 `perm`（`view` / `upload` / `both`）—— 新增私人雲端資料夾 |
 | `POST` | `/api/folders/rename` | JSON：`folder_id`、`name` —— 改資料夾名字（id、檔案、分享連結都不變） |
+| `POST` | `/api/folders/perm` | JSON：`folder_id`、`perm` —— 改分享連結預設權限 |
 | `GET` | `/api/folders` | 私人資料夾清單（含檔案數） |
 | `GET`/`POST` | `/deldir/{folder_id}` | 刪除私人資料夾（含其中的檔案） |
 | `GET` | `/?folder={folder_id}` | 登入後的雲端畫面：資料夾方塊、麵包屑、檔案清單 |
-| `POST` | `/api/folders/{id}/share` | JSON：`mode`（`view` 僅檢視 / `upload` 可上傳）—— 產生免登入分享連結 |
+| `POST` | `/api/folders/{id}/share` | JSON：`mode`（`view` 僅檢視 / `upload` 投遞箱 / `both` 都要；省略則用資料夾 `perm`）—— 產生免登入分享連結 |
 | `POST` | `/api/share/revoke` | JSON：`token` —— 取消分享 |
 | `GET` | `/s/{token}` | 分享資料夾頁（瀏覽器 UI / 純文字） |
 | `POST` | `/api/share/merge_chunks` | JSON：`upload_id`、`filename`、`total_chunks`、`token` —— 經分享連結上傳 |
@@ -143,9 +157,10 @@ curl -F file=@big.iso "https://proxy.example/https://this.host/api/upload_chunk?
 | `GET` | `/view/{file_id}` | 線上預覽 |
 | `GET`/`POST` | `/del/{file_id}` | 刪除（`POST` 讓頁面停在原資料夾，不用導走） |
 | `POST` | `/api/files/move` | JSON：`file_id`、`folder_id`、`from_folder_id` —— 拖曳移動 |
-| `POST` | `/api/public/folder/rename` | JSON：`folder_id`、`name` —— 改公開資料夾名字（網址不變） |
+| `POST` | `/api/public/folder/rename` | JSON：`folder_id`、`name` —— 改公開資料夾名字（網址不變）；建立該資料夾的 session 也可以 |
+| `POST` | `/api/public/folder/perm` | JSON：`folder_id`、`perm`（`readonly` / `upload` / `both`）—— 設非擁有者的權限 |
 | `POST` | `/api/public/move` | JSON同上 —— 公開檔案拖曳移動 |
-| `POST` | `/delpub/{file_id}`、`/delpubdir/{folder_id}` | 從所有公開資料夾移除 |
+| `POST` | `/delpub/{file_id}`、`/delpubdir/{folder_id}` | 從所有公開資料夾移除（管理員或建立者的 session） |
 | `GET/POST` | `/m/{token}` | 單檔手機上傳（相容 iPhone 捷徑） |
 | `GET/POST` | `/login`、`GET /logout` | 密碼 session |
 
