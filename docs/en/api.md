@@ -96,6 +96,23 @@ The bytes. Supports `Range:` for resume and parallel fetching. Add
 - `GET /api/public/single/{file_id}` — metadata and direct link.
 - `GET /dl/s/{file_id}` — download (`?preview=1` to preview).
 
+### `POST /api/public/upload_url` (upload from a URL)
+
+JSON `{"url", "folder" (optional), "description" (optional)}`: the server
+fetches the URL through `PROXY_BASE_URL` (default
+`https://proxy.chiuhuang.dev`) and stores the bytes exactly like an ordinary
+public upload (same `folder` rules as above). Anonymous calls are throttled to
+`URL_THROTTLE_MBPS` (60 by default); a signed-in session is uncapped. The
+response has the same shape as `/api/public/upload`.
+
+### Download a whole folder as .zip
+
+- `GET /zip/f/{folder_id}` — a public folder as one `.zip`, named after the folder.
+- `GET /zip/{folder_id}` — a private folder; needs a signed-in session.
+
+The zip is **streamed live**: built in memory step by step, never written to
+disk. Flat (no subdirectories); duplicate names get a ` (1)`-style suffix.
+
 ## Clients behind a proxy: `?auth=`
 
 A CORS-style proxy (`https://proxy.example/https://this.host/...`) forwards

@@ -88,6 +88,22 @@ curl -X POST https://this.host/api/public/folder/rename \
 - `GET /api/public/single/{file_id}`：單檔資訊與直連。
 - `GET /dl/s/{file_id}`：下載（`?preview=1` 預覽）。
 
+### `POST /api/public/upload_url`（從網址上傳）
+
+JSON `{"url", "folder"（選填）, "description"（選填）}`：伺服器透過
+`PROXY_BASE_URL`（預設 `https://proxy.chiuhuang.dev`）把 URL 抓回來，
+bytes 照一般公開上傳入庫（`folder` 規則同上）。匿名呼叫限速
+`URL_THROTTLE_MBPS`（預設 60 Mbps）；登入後不限速。回應格式與
+`/api/public/upload` 相同。
+
+### 整包下載資料夾（.zip）
+
+- `GET /zip/f/{folder_id}`：公開資料夾整包下成 `.zip`，檔名取資料夾名。
+- `GET /zip/{folder_id}`：私人資料夾，需登入。
+
+zip 是**邊打包邊串流**的，伺服器只留一份在記憶體、不寫暫存；無子目錄，
+同名檔自動加 ` (1)` 後綴。
+
 ## 經代理的客戶端：`?auth=`
 
 CORS 型代理（`https://proxy.example/https://this.host/...`）會轉送請求，但

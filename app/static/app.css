@@ -1,4 +1,30 @@
 :root { color-scheme: light dark; }
+/* 藍色主題：覆寫 mdui v2 的 MD3 色票。
+   注意兩點：
+   1. mdui v2 的色票是「逗號分隔的 RGB 三元組」（rgb(var(--token)) 拼出顏色），
+      不是 hex——寫 hex 會把整份 palette 弄壞。
+   2. <html> 上往往只有 mdui-theme-auto（跟隨系統深淺色），所以不能直接改
+      .mdui-theme-light / .mdui-theme-dark；要改的是 :root 上的基底三元組
+      「*light / *dark」，light、dark、auto 三種模式都從這裡取值。 */
+:root {
+  --mdui-color-primary-light: 21, 101, 192;            /* #1565c0 */
+  --mdui-color-on-primary-light: 255, 255, 255;
+  --mdui-color-primary-container-light: 214, 227, 255; /* #d6e3ff */
+  --mdui-color-on-primary-container-light: 0, 44, 106; /* #002c6a */
+  --mdui-color-secondary-light: 21, 101, 192;
+  --mdui-color-secondary-container-light: 214, 227, 255;
+  --mdui-color-on-secondary-container-light: 0, 44, 106;
+  --mdui-color-surface-tint-color-light: 21, 101, 192;
+  --mdui-color-primary-dark: 158, 203, 255;            /* #9ecbff */
+  --mdui-color-on-primary-dark: 0, 49, 94;             /* #00315e */
+  --mdui-color-primary-container-dark: 0, 71, 134;     /* #004786 */
+  --mdui-color-on-primary-container-dark: 214, 227, 255;
+  --mdui-color-secondary-dark: 158, 203, 255;
+  --mdui-color-secondary-container-dark: 41, 69, 110;  /* #29456e */
+  --mdui-color-on-secondary-container-dark: 214, 227, 255;
+  --mdui-color-surface-tint-color-dark: 158, 203, 255;
+}
+
 .page { max-width: 960px; margin: 0 auto; padding: 16px 16px 48px; }
 .hero { padding: 16px 20px; margin-bottom: 12px; }
 .hero h1 { margin: 0 0 4px; font-size: 1.5rem; }

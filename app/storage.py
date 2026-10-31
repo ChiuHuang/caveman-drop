@@ -17,6 +17,7 @@ import re
 import shutil
 import threading
 import time
+from urllib.parse import quote
 from collections import defaultdict, deque
 from typing import Any
 
@@ -634,6 +635,20 @@ def private_files() -> list[dict[str, Any]]:
     return files
 
 
+def _disposition(fname: str, inline: bool) -> str:
+    """RFC 5987 Content-Disposition.
+
+    Starlette encodes headers latin-1, so a raw filename with Chinese or any
+    non-latin-1 character would raise UnicodeEncodeError. ASCII names stay
+    plain; anything else gets a safe ASCII fallback plus `filename*=UTF-8''`.
+    """
+    kind = "inline" if inline else "attachment"
+    if fname.isascii() and '"' not in fname:
+        return f'{kind}; filename="{fname}"'
+    fallback = fname.encode("ascii", "ignore").decode().replace('"', "").strip() or "file"
+    return f'{kind}; filename="{fallback}"; filename*=UTF-8\'\'{quote(fname)}'
+
+
 def stream_download(
     request: Request,
     path: str,
@@ -647,11 +662,12 @@ def stream_download(
     `cache=True` marks the response immutable (content-addressed URLs), so a CDN
     in front of the server can hold it for a year.
     """
+    fname = str(fname or "file")
     if not os.path.exists(path):
         raise HTTPException(404)
     file_size = os.path.getsize(path)
     media = content_type or "application/octet-stream"
-    disposition = ("inline" if inline else "attachment") + f'; filename="{fname}"'
+    disposition = _disposition(fname, inline)
     rng = request.headers.get("range")
     immutable = {"Cache-Control": "public, max-age=31536000, immutable"} if cache else {}
 
@@ -1013,3 +1029,81 @@ def sweep_tmp() -> int:
         except OSError:
             continue
     return removed
+
+
+# ---- live-streamed folder zip ----
+
+
+def zip_stream_request(entries: list[tuple[str, str]]):
+    """Prepare a live-streamed .zip build of `entries` = [(arcname, disk_path)].
+
+    Nothing touches disk: a worker thread drives zipfile into a write-only
+    sink whose bytes are pushed through a bounded queue, and the response
+    consumes the generator as it is produced. ZIP_STORED (media is usually
+    already compressed), ZIP64 on, duplicate arcnames get a (1)-style suffix.
+    Call `start()` (spins the worker), then zip `gen` into a StreamingResponse;
+    the worker cleans up after itself.
+    """
+    import queue
+    import threading
+    import zipfile as zf
+
+    q: "queue.Queue" = queue.Queue(maxsize=64)
+    DONE = object()
+
+    class _Sink:
+        """Write-only, counting sink (dependable `tell`, unseekable output)."""
+
+        def __init__(self) -> None:
+            self.count = 0
+
+        def write(self, b) -> int:
+            b = bytes(b)
+            self.count += len(b)
+            q.put(b)
+            return len(b)
+
+        def flush(self) -> None:
+            pass
+
+        def tell(self) -> int:
+            return self.count
+
+        def seekable(self) -> bool:
+            return False
+
+    arc_seen: set = set()
+
+    def _unique(arc: str) -> str:
+        name, i = arc, 0
+        while name in arc_seen:
+            i += 1
+            base, dot, ext = arc.rpartition(".")
+            name = f"{base} ({i}){dot}{ext}" if dot else f"{arc} ({i})"
+        arc_seen.add(name)
+        return name
+
+    def worker(fail: list) -> None:
+        try:
+            with zf.ZipFile(_Sink(), "w", compression=zf.ZIP_STORED, allowZip64=True) as z:
+                for arc, path in entries:
+                    z.write(path, _unique(arc))
+        except BaseException as e:  # surfaced through the stream
+            fail.append(e)
+        finally:
+            q.put(DONE)
+
+    def start(fail: list) -> None:
+        threading.Thread(target=worker, args=(fail,), daemon=True).start()
+
+    def gen(fail: list):
+        while True:
+            item = q.get()
+            if item is DONE:
+                if fail:
+                    raise fail[0]
+                return
+            yield item
+
+    return start, gen
+

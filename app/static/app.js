@@ -1,4 +1,5 @@
 // CaveMan Drop 瀏覽器互動：側欄、主題、複製、分段上傳、並行下載、預覽、刪除確認。
+// 列表的更新（新增／改名／刪除／移動）全部在 client 即時改 DOM，不 reload。
 (function () {
   const THREADS = 16;
   const CHUNK = 4 * 1024 * 1024;
@@ -32,12 +33,16 @@
       sec: " 秒", min: " 分 ", hour: " 小時 ",
       upDone: "上傳完成", folderCreated: "資料夾已建立",
       stats: "{size} · {secs} 秒 · 平均 {rate}/s{dup}", dup: " · 內容已存在，未重複儲存",
-      rowLink: "連結", rowFile: "檔案", rowDirect: "直連", rowFolder: "資料夾",
+      rowLink: "連結", rowDirect: "直連", rowFolder: "資料夾",
       copy: "複製", open: "開啟", preview: "預覽", close: "關閉",
+      download: "下載", directLink: "直接連結", copyLink: "複製連結", delBtn: "刪除",
+      items: "{n} 個項目", emptyFiles: "還沒有檔案。",
+      zipBtn: "打包下載", shareView: "檢視連結",
       dropUpload: "放開手上傳", dropInto: "放到「{name}」", dropFolder: "放到這個資料夾",
       multi: "上傳 {i}/{n}：{name}", previewTitle: "預覽 — ",
       rename: "改名", renameOk: "已改名", renameFail: "改名失敗", newFolder: "新增資料夾",
       save: "儲存", cancel: "取消", nameLabel: "名稱", driveTitle: "我的雲端",
+      urlNeed: "請先輸入檔案網址", urlFail: "從網址上傳失敗：", urlUp: "從網址上傳",
     },
     en: {
       copied: "Link copied", copyFail: "Copy failed", needFile: "Pick a file first",
@@ -59,12 +64,16 @@
       sec: "s", min: "m ", hour: "h ",
       upDone: "Upload complete", folderCreated: "Folder created",
       stats: "{size} · {secs}s · {rate}/s average{dup}", dup: " · already stored, not duplicated",
-      rowLink: "Link", rowFile: "File", rowDirect: "Direct", rowFolder: "Folder",
+      rowLink: "Link", rowDirect: "Direct", rowFolder: "Folder",
       copy: "Copy", open: "Open", preview: "Preview", close: "Close",
+      download: "Download", directLink: "Direct link", copyLink: "Copy link", delBtn: "Delete",
+      items: "{n} items", emptyFiles: "No files yet.",
+      zipBtn: "Download .zip", shareView: "View link",
       dropUpload: "Drop to upload", dropInto: "Drop into “{name}”", dropFolder: "Drop into this folder",
       multi: "Uploading {i}/{n}: {name}", previewTitle: "Preview — ",
       rename: "Rename", renameOk: "Renamed", renameFail: "Rename failed", newFolder: "New folder",
       save: "Save", cancel: "Cancel", nameLabel: "Name", driveTitle: "My drive",
+      urlNeed: "Enter a file URL first", urlFail: "URL upload failed: ", urlUp: "URL upload",
     },
   };
   const S = T[LANG === "zh-TW" ? "zh" : "en"];
@@ -164,6 +173,151 @@
   const esc = (s) => String(s == null ? "" : s)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
+  // ---- 列列更新的小工具（新檔案／資料夾列就這樣蓋出來，跟 ui.py 一模一樣）----
+  function fmtTime(ts) {
+    const d = new Date(Number(ts) * 1000);
+    if (!Number(ts) || isNaN(d.getTime())) return "";
+    const p = (x) => String(x).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  }
+  function metaLine(f, withType) {
+    const bits = [fmtMB(f.bytes != null ? f.bytes : f.size || 0)];
+    if (withType && f.content_type) bits.push(f.content_type);
+    const t2 = fmtTime(f.ctime);
+    if (t2) bits.push(t2);
+    if (f.description) bits.push(f.description);
+    return bits.join(" · ");
+  }
+
+  function fileRowHtml(f) {
+    const pub = f.scope === "public";
+    const dl = f.dl
+      || (pub ? (f.folder_id ? `/dl/pub/${f.folder_id}/${f.id}` : `/dl/s/${f.id}`) : `/dl/${f.id}`);
+    const pv = pub ? dl + "?preview=1" : `/view/${f.id}`;
+    const copyTarget = pub && f.short_url ? f.short_url : dl;
+    const copyLabel = pub ? S.copyLink : S.directLink;
+    const delUrl = pub ? `/delpub/${f.id}` : `/del/${f.id}`;
+    return (
+      `<mdui-list-item draggable="true" data-move="${esc(f.id)}"` +
+      ` data-scope="${pub ? "public" : "private"}" data-from="${esc(f.folder_id || "")}"` +
+      ` data-name="${esc(f.name)}" data-sort-name="${esc(String(f.name).toLowerCase())}"` +
+      ` data-sort-size="${esc(String(f.bytes || 0))}" data-sort-time="${esc(String(f.ctime || 0))}">` +
+      '<mdui-icon slot="icon" name="description"></mdui-icon>' +
+      `<div><div class="fname">${esc(f.name)}</div>` +
+      `<div class="fmeta">${esc(metaLine(f, !pub))}</div></div>` +
+      `<mdui-button-icon slot="end-icon" icon="visibility" data-preview="${esc(pv)}"` +
+      ` data-name="${esc(f.name)}" title="${esc(S.preview)}"></mdui-button-icon>` +
+      `<mdui-button-icon slot="end-icon" icon="download" data-mt-download="${esc(dl)}"` +
+      ` data-name="${esc(f.name)}" data-size="${esc(String(f.bytes || 0))}"` +
+      ` title="${esc(S.download)}"></mdui-button-icon>` +
+      `<mdui-button slot="end-icon" variant="text" data-copy="${esc(copyTarget)}">${esc(copyLabel)}</mdui-button>` +
+      `<mdui-button-icon slot="end-icon" icon="edit" data-rename-file="${esc(f.id)}"` +
+      ` data-name="${esc(f.name)}" data-public="${pub ? 1 : 0}"` +
+      ` data-in-folder="${esc(f.folder_id || "")}" title="${esc(S.rename)}"></mdui-button-icon>` +
+      `<mdui-button slot="end-icon" variant="text" data-delete="${esc(delUrl)}"` +
+      ` data-delete-post="1" data-name="${esc(f.name)}">${esc(S.delBtn)}</mdui-button>` +
+      "</mdui-list-item>"
+    );
+  }
+
+  function folderRowHtml(fid, name, count, ctime, isPublic) {
+    const href = isPublic ? `/f/${fid}` : `/?folder=${fid}`;
+    const zipHref = isPublic ? `/zip/f/${fid}` : `/zip/${fid}`;
+    let btns;
+    if (isPublic) {
+      btns = (
+        `<a href="${esc(href)}"><mdui-button-icon icon="open_in_new" title="${esc(S.open)}"></mdui-button-icon></a>` +
+        `<mdui-button-icon icon="archive" title="${esc(S.zipBtn)}" data-zip="${esc(zipHref)}"></mdui-button-icon>` +
+        `<mdui-button-icon icon="edit" data-rename="${esc(fid)}" data-name="${esc(name)}"` +
+        ` data-public="1" title="${esc(S.rename)}"></mdui-button-icon>` +
+        `<mdui-button-icon icon="delete" data-delpubdir="${esc(`/delpubdir/${fid}`)}"` +
+        ` data-name="${esc(name)}" data-count="${count}" title="${esc(S.delBtn)}"></mdui-button-icon>`
+      );
+    } else {
+      btns = (
+        `<mdui-button-icon icon="folder_open" data-open="${esc(href)}" title="${esc(S.open)}"></mdui-button-icon>` +
+        `<mdui-button-icon icon="archive" title="${esc(S.zipBtn)}" data-zip="${esc(zipHref)}"></mdui-button-icon>` +
+        `<mdui-button-icon icon="link" data-share-create="${esc(fid)}" data-mode="view"` +
+        ` title="${esc(S.shareView)}"></mdui-button-icon>` +
+        `<mdui-button-icon icon="edit" data-rename="${esc(fid)}" data-name="${esc(name)}"` +
+        ` data-public="0" title="${esc(S.rename)}"></mdui-button-icon>` +
+        `<mdui-button-icon icon="delete" data-delete-dir="${esc(`/deldir/${fid}`)}"` +
+        ` data-name="${esc(name)}" data-count="${count}" title="${esc(S.delBtn)}"></mdui-button-icon>`
+      );
+    }
+    return (
+      `<mdui-list-item class="frow" data-dropscope="${isPublic ? "public" : "private"}"` +
+      ` data-dropfolder="${esc(fid)}" data-droplabel="${esc(name)}" data-count="${count}"` +
+      ` data-sort-name="${esc(String(name).toLowerCase())}" data-sort-time="${esc(String(ctime || 0))}"` +
+      ' data-sort-size="0">' +
+      '<mdui-icon slot="icon" name="folder"></mdui-icon>' +
+      `<div><a class="fname" href="${esc(href)}">${esc(name)}</a>` +
+      `<div class="fmeta">${esc(fill(S.items, { n: count }))}</div></div>` +
+      `<span slot="end-icon" class="frow-btns">${btns}</span>` +
+      "</mdui-list-item>"
+    );
+  }
+
+  // 目前看得到的那張列表卡（公開資料夾頁、雲端分頁都各自一張）
+  function visibleCard() {
+    const cards = Array.from(document.querySelectorAll(".card-pad")).filter((c) => c.offsetParent !== null);
+    return cards.find((c) => c.querySelector("[data-sortbar]") || c.querySelector("mdui-list.file-list")) || null;
+  }
+  function ensureFileList(card) {
+    if (!card) return null;
+    let list = card.querySelector("mdui-list.file-list");
+    if (list) return list;
+    const empty = card.querySelector("mdui-card.empty");
+    if (empty) empty.remove();
+    list = document.createElement("mdui-list");
+    list.className = "file-list";
+    const sortbar = card.querySelector("[data-sortbar]");
+    if (sortbar) sortbar.insertAdjacentElement("afterend", list);
+    else card.appendChild(list);
+    return list;
+  }
+  function updateHeadCount(card, by) {
+    if (!card || !by) return;
+    const h = card.querySelector(".drive-head h2");
+    if (!h) return;
+    const m = h.textContent.match(/^(.*?)([（(])(\d+)([）)])\s*$/);
+    if (!m) return;
+    h.textContent = m[1] + m[2] + Math.max(0, parseInt(m[3], 10) + by) + m[4];
+  }
+  function adjustFolderCount(scope, fid, by) {
+    if (!fid) return;
+    const card = visibleCard();
+    const row = card && card.querySelector(`mdui-list-item.frow[data-dropscope="${scope}"][data-dropfolder="${CSS.escape(fid)}"]`);
+    if (!row) return;
+    const n = Math.max(0, parseInt(row.getAttribute("data-count") || "0", 10) + by);
+    row.setAttribute("data-count", String(n));
+    const meta = row.querySelector(".fmeta");
+    if (meta) meta.textContent = fill(S.items, { n });
+    const del = row.querySelector("[data-count]");
+    if (del) del.setAttribute("data-count", String(n));
+  }
+  function insertRow(html, bump) {
+    const card = visibleCard();
+    const list = ensureFileList(card);
+    if (!list) return;
+    list.insertAdjacentHTML("afterbegin", html);
+    updateHeadCount(card, bump == null ? 1 : bump);
+  }
+  function afterRowGone(row) {
+    const card = row.closest(".card-pad");
+    const list = row.closest("mdui-list.file-list");
+    row.remove();
+    updateHeadCount(card, -1);
+    if (list && !list.children.length) {
+      list.remove();
+      const mark = document.createElement("mdui-card");
+      mark.setAttribute("variant", "filled");
+      mark.className = "empty";
+      mark.textContent = S.emptyFiles;
+      card.appendChild(mark);
+    }
+  }
+
   function linkRow(label, url, buttons) {
     return `<div class="rlink"><span class="rlink-label">${esc(label)}</span><code>${esc(url)}</code>` +
       `<span class="rlink-btns">${buttons}</span></div>`;
@@ -178,9 +332,13 @@
   }
 
   // ---- 分段上傳（含線程表 + 分段條 + 測速 + 暫停）----
-  async function chunkedUpload(form) {
-    const input = form.querySelector('input[type="file"]');
-    const file = input && input.files[0];
+  async function chunkedUpload(form, theFile) {
+    const file = theFile || (function () {
+      for (const inp of form.querySelectorAll('input[type="file"]')) {
+        if (inp.files && inp.files[0]) return inp.files[0];
+      }
+      return null;
+    })();
     if (!file) { window.toast(S.needFile); return; }
     const mergeUrl = form.getAttribute("data-merge");
     const isPublic = form.hasAttribute("data-public");
@@ -209,7 +367,7 @@
 
     if (btn) btn.loading = true;
     if (panel) { panel.hidden = false; panel.__state = state; }
-    if (pauseBtn) { pauseBtn.textContent = "暫停"; }
+    if (pauseBtn) { pauseBtn.textContent = S.pause; }
     if (panel) panel.classList.remove("paused");
 
     // 線程表：最多顯示 16 列，人多時輪流顯示
@@ -401,37 +559,47 @@
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || ("HTTP " + res.status));
       if (btn) btn.loading = false;
+      const secs = elapsed < 10 ? elapsed.toFixed(1) : Math.round(elapsed);
+      const stats = fill(S.stats, {
+        size: fmtMB(data.size_bytes), secs, rate: fmtMB(data.size_bytes / elapsed),
+        dup: data.deduplicated ? S.dup : "",
+      });
       if (isPublic) {
         const out = form.parentElement.querySelector("[data-upload-result]");
         const durl = data.download_url || data.url;
         const furl = data.folder_url || data.share_url;
         const share = data.short_url || durl;   // catbox-style short link when we have one
-        const secs = elapsed < 10 ? elapsed.toFixed(1) : Math.round(elapsed);
+        // 上傳完成不給「開啟」鈕：只留預覽／複製
         const rows = [];
         if (share && share !== durl) {
           rows.push(linkRow(S.rowLink, share,
-            `<mdui-button variant="text" data-copy="${esc(share)}">${esc(S.copy)}</mdui-button>` +
-            `<a href="${esc(share)}"><mdui-button variant="text">${esc(S.open)}</mdui-button></a>`));
+            `<mdui-button variant="text" data-copy="${esc(share)}">${esc(S.copy)}</mdui-button>`));
         }
-        rows.push(linkRow(share === durl ? S.rowFile : S.rowDirect, durl,
+        rows.push(linkRow(S.rowDirect, durl,
           `<mdui-button variant="text" data-preview="${esc(durl)}?preview=1" data-name="${esc(data.filename)}">${esc(S.preview)}</mdui-button>` +
           `<mdui-button variant="text" data-copy="${esc(durl)}">${esc(S.copy)}</mdui-button>`));
         if (furl) {
           rows.push(linkRow(S.rowFolder, furl,
-            `<a href="${esc(furl)}"><mdui-button variant="text">${esc(S.open)}</mdui-button></a>` +
             `<mdui-button variant="text" data-copy="${esc(furl)}">${esc(S.copy)}</mdui-button>`));
         }
-        const stats = fill(S.stats, {
-          size: fmtMB(data.size_bytes), secs, rate: fmtMB(data.size_bytes / elapsed),
-          dup: data.deduplicated ? S.dup : "",
-        });
         const html = resultCard(S.upDone, data.filename, stats, rows);
         if (out) out.innerHTML = html;
         if (panel) panel.hidden = true;
+        // 就地把新檔塞進目前看得到的列表
+        insertRow(fileRowHtml({
+          id: data.file_id, name: data.filename, bytes: data.size_bytes,
+          ctime: Date.now() / 1000, description: data.description,
+          scope: "public", folder_id: data.folder_id, short_url: data.short_url,
+        }));
         window.toast(S.done);
       } else {
+        if (panel) panel.hidden = true;
+        insertRow(fileRowHtml({
+          id: data.file_id, name: file.name, bytes: data.size_bytes,
+          ctime: Date.now() / 1000, description: data.description || desc,
+          scope: "private", folder_id: fieldValue(form, "folder_id"),
+        }));
         window.toast(S.done);
-        window.location.reload();
       }
     } catch (err) {
       window.toast(S.mergeFail + err.message);
@@ -536,12 +704,6 @@
   }
 
   // ---- 拖放：拖檔案進資料夾、拖檔案列換資料夾、整頁拖放上傳 ----
-  function pickFile(input, file) {
-    const dt = new DataTransfer();
-    dt.items.add(file);
-    input.files = dt.files;
-  }
-
   function formForScope(scope) {
     const forms = Array.from(document.querySelectorAll("form[data-chunked]"))
       .filter((f) => f.offsetParent !== null);   // visible tab only
@@ -572,16 +734,32 @@
   async function uploadDropped(files, scope, folderId, label) {
     const form = formForScope(scope);
     if (!form) { window.toast(S.switchTab); return; }
-    const input = form.querySelector('input[type="file"]');
     setTargetFolder(form, scope, folderId);
     const list = Array.from(files);
     for (let i = 0; i < list.length; i++) {
       if (list.length > 1) window.toast(fill(S.multi, { i: i + 1, n: list.length, name: list[i].name }));
-      pickFile(input, list[i]);
-      await chunkedUpload(form);
+      await chunkedUpload(form, list[i]);
     }
-    if (list.length > 1) window.location.reload();
-    else if (label) window.toast(S.uploadedTo + label);
+    if (label) window.toast(S.uploadedTo + label);
+  }
+
+  function adjustCountsForVisualMove(row, scope, targetFolder) {
+    const from = row.getAttribute("data-from") || "";
+    const to = targetFolder || "";
+    if (from === to) return;
+    // 資料夾列上的項目計數跟著動
+    adjustFolderCount(scope, from, -1);
+    adjustFolderCount(scope, to, +1);
+    if (scope === "private") {
+      // 私人雲端一次只顯示一個資料夾：移去别的資料夾就把列拿掉
+      const panelForm = formForScope("private");
+      const viewed = panelForm ? fieldValue(panelForm, "folder_id") : "";
+      if ((from || "") === (viewed || "") && to !== (viewed || "")) afterRowGone(row);
+      else row.setAttribute("data-from", to);
+    } else {
+      // 公開分頁列出所有公開檔：留下列，只更新所屬資料夾
+      row.setAttribute("data-from", to);
+    }
   }
 
   async function moveDropped(fileId, scope, folderId, label, fromFolder) {
@@ -597,9 +775,62 @@
         }),
       });
       if (!res.ok) throw new Error("HTTP " + res.status);
+      // 即時更新列與資料夾計數，不 reload
+      const row = document.querySelector(`mdui-list-item[data-move="${CSS.escape(fileId)}"]`);
+      if (row) adjustCountsForVisualMove(row, scope, folderId);
       window.toast(label ? S.moved + label : S.movedOut);
-      window.location.reload();
     } catch { window.toast(S.moveFail); }
+  }
+
+  // ---- URL 上傳：伺服器經 proxy 抓回來當公開上傳 ----
+  async function uploadFromUrl(btn) {
+    const host = btn.closest(".card-pad") || btn.parentElement;
+    if (!host) return;
+    const urlField = host.querySelector("[data-url-input]")
+      || (host.parentElement && host.parentElement.querySelector("[data-url-input]"));
+    if (!urlField) return;
+    const inner = urlField.querySelector ? urlField.querySelector("input") : null;
+    const url = String(urlField.value != null && urlField.value !== "" ? urlField.value : inner ? inner.value : "").trim();
+    if (!url) { window.toast(S.urlNeed); return; }
+    const form = host.querySelector("form[data-chunked]");
+    const folder = form ? fieldValue(form, "folder") : "";
+    const desc = form ? fieldValue(form, "description") : "";
+    btn.loading = true;
+    try {
+      const res = await fetch("/api/public/upload_url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url, folder: folder || null, description: desc }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || ("HTTP " + res.status));
+      const durl = data.download_url || data.url;
+      const furl = data.folder_url || data.share_url;
+      const share = data.short_url || durl;
+      const rows = [];
+      if (share && share !== durl) {
+        rows.push(linkRow(S.rowLink, share,
+          `<mdui-button variant="text" data-copy="${esc(share)}">${esc(S.copy)}</mdui-button>`));
+      }
+      rows.push(linkRow(S.rowDirect, durl,
+        `<mdui-button variant="text" data-preview="${esc(durl)}?preview=1" data-name="${esc(data.filename)}">${esc(S.preview)}</mdui-button>` +
+        `<mdui-button variant="text" data-copy="${esc(durl)}">${esc(S.copy)}</mdui-button>`));
+      if (furl) {
+        rows.push(linkRow(S.rowFolder, furl,
+          `<mdui-button variant="text" data-copy="${esc(furl)}">${esc(S.copy)}</mdui-button>`));
+      }
+      const out = host.querySelector("[data-upload-result]");
+      if (out) out.innerHTML = resultCard(S.upDone, data.filename, "", rows);
+      window.toast(S.done);
+      // 就地插入列（公開資料夾頁／公開分頁），找到資料夾時伺服器回 folder_id
+      insertRow(fileRowHtml({
+        id: data.file_id, name: data.filename, bytes: data.size_bytes,
+        ctime: Date.now() / 1000, description: data.description,
+        scope: "public", folder_id: data.folder_id, short_url: data.short_url,
+      }));
+    } catch (err) {
+      window.toast(S.urlFail + err.message);
+    } finally { btn.loading = false; }
   }
 
   const MOVE_MIME = "application/x-caveman-move";
@@ -642,7 +873,7 @@
       if (!hasFiles(ev)) return;
       ev.preventDefault();
       const target = ev.target.closest ? ev.target.closest("[data-dropscope]") : null;
-      ev.dataTransfer.dropEffect = target && scopeOf(target) === "private" ? "copy" : "copy";
+      ev.dataTransfer.dropEffect = "copy";
       root.querySelectorAll(".dragover").forEach((el) => el.classList.remove("dragover"));
       highlight(target, true);
       if (hint) hint.textContent = target ? dropLabel(target) : S.dropUpload;
@@ -719,14 +950,6 @@
       window.toast(S.theme + names[next]);
     });
 
-    // 全域委派：複製 / 預覽（含動態加入的結果列）
-    document.addEventListener("click", (ev) => {
-      const cp = ev.target && ev.target.closest ? ev.target.closest("[data-copy]") : null;
-      if (cp) { copyText(cp.getAttribute("data-copy")); return; }
-      const pv = ev.target && ev.target.closest ? ev.target.closest("[data-preview]") : null;
-      if (pv) preview(pv.getAttribute("data-preview"), pv.getAttribute("data-name") || "");
-    });
-
     // 上傳 / 建資料夾頁籤（只看同一層的 panel，避免蓋掉巢狀頁籤）
     document.querySelectorAll("[data-tabs]").forEach((tabs) => {
       const root = tabs.parentElement;
@@ -741,201 +964,253 @@
       show(tabs.getAttribute("value") || (tabs.querySelector("mdui-tab") || {}).getAttribute?.("value"));
     });
 
-    // 分段上傳（公開 + 私人共用，data-merge 指向各自合併端點）；可一次選多個檔
+    // 上傳表單：data-dirpick 時走整個資料夾的 input（webkitdirectory）
     document.querySelectorAll("form[data-chunked]").forEach((form) => {
       form.addEventListener("submit", async (ev) => {
         ev.preventDefault();
-        const input = form.querySelector('input[type="file"]');
-        const files = Array.from((input && input.files) || []);
+        let files;
+        if (form.dataset.dirpick === "1") {
+          const dIn = form.querySelector('input[name="dir_files"]');
+          files = Array.from((dIn && dIn.files) || []);
+          delete form.dataset.dirpick;
+        } else {
+          const input = form.querySelector('input[name="file"]');
+          files = Array.from((input && input.files) || []);
+        }
         if (!files.length) { window.toast(S.needFile); return; }
         for (let i = 0; i < files.length; i++) {
           if (files.length > 1) window.toast(fill(S.multi, { i: i + 1, n: files.length, name: files[i].name }));
-          pickFile(input, files[i]);
-          await chunkedUpload(form);
+          await chunkedUpload(form, files[i]);
         }
-        if (files.length > 1) window.location.reload();
       });
     });
 
-    // 並行下載
-    document.querySelectorAll("[data-mt-download]").forEach((btn) => {
-      btn.addEventListener("click", () => mtDownload(btn));
-    });
-
-    // 預覽（靜態列；動態結果列走全域委派）
-
-    // 私人新增資料夾
-    document.querySelectorAll("form[data-mkdir]").forEach((form) => {
-      form.addEventListener("submit", async (ev) => {
-        ev.preventDefault();
-        const name = fieldValue(form, "name");
-        if (!name) { window.toast(S.needName); return; }
-        try {
-          const res = await fetch("/api/folders", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ name }),
-          });
-          if (!res.ok) throw new Error("HTTP " + res.status);
-          window.toast(S.mkdirOk);
-          window.location.reload();
-        } catch { window.toast(S.mkdirFail); }
-      });
-    });
-
-    // 資料夾列的「打開」圖示
-    document.querySelectorAll("[data-open]").forEach((btn) => {
-      btn.addEventListener("click", (ev) => {
-        ev.preventDefault();
-        ev.stopPropagation();
-        window.location.href = btn.getAttribute("data-open");
-      });
-    });
-
-    // 雲端工具列：新增資料夾（資料夾圖示）＋上傳（雲朵圖示）
-    document.querySelectorAll("[data-new-folder]").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const name = await askName(S.newFolder, "");
-        if (!name) return;
-        try {
-          await postJSON("/api/folders", { name });
-          window.toast(S.mkdirOk);
-          window.location.reload();
-        } catch { window.toast(S.mkdirFail); }
-      });
-    });
-    document.querySelectorAll("[data-drive-upload]").forEach((btn) => {
+    // 雲端工具列與公開表單：選整個資料夾（dir input）→ 打開挑選器
+    document.querySelectorAll("[data-dir-pick], [data-drive-dir]").forEach((btn) => {
       btn.addEventListener("click", () => {
-        const panel = btn.closest("[data-tabpanel]") || document;
-        const input = panel.querySelector('form[data-chunked]:not([data-public]) input[type="file"]')
-          || document.querySelector('form[data-chunked]:not([data-public]) input[type="file"]');
-        if (input) input.click();
+        const form = btn.closest("form[data-chunked]")
+          || (btn.closest("[data-tabpanel]") || document).querySelector("form[data-chunked]:not([data-public])")
+          || document.querySelector("form.drive-upload");
+        if (!form) return;
+        const dirIn = form.querySelector('input[name="dir_files"]');
+        if (!dirIn) return;
+        form.dataset.dirpick = "1";
+        dirIn.click();
       });
     });
-    // 工具列的檔案選擇器是隱藏的：挑完檔直接送出表單
-    document.querySelectorAll("form.drive-upload input[type=file]").forEach((input) => {
+    // 挑完檔直接送出表單（含 dir picker、取消時不送）
+    document.querySelectorAll("form[data-chunked] input[type=file]").forEach((input) => {
       input.addEventListener("change", () => {
         if (input.files && input.files.length && input.form) input.form.requestSubmit();
       });
     });
 
-    // 改名：資料夾圖示上的筆。data-public=1 走公開資料夾端點。
-    document.querySelectorAll("[data-rename]").forEach((btn) => {
-      btn.addEventListener("click", async (ev) => {
-        ev.preventDefault();
-        ev.stopPropagation();
-        const id = btn.getAttribute("data-rename");
-        const isPublic = btn.getAttribute("data-public") === "1";
-        const name = await askName(S.rename, btn.getAttribute("data-name") || "");
+    // 雲端工具列：上傳（隱藏的 input 打開選擇器）
+    document.querySelectorAll("[data-drive-upload]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const panel = btn.closest("[data-tabpanel]") || document;
+        const input = panel.querySelector('form[data-chunked]:not([data-public]) input[name="file"]')
+          || document.querySelector('form[data-chunked]:not([data-public]) input[name="file"]');
+        if (input) input.click();
+      });
+    });
+
+    // 雲端工具列：新增資料夾 → 就地插入列，不 reload
+    document.querySelectorAll("[data-new-folder]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const name = await askName(S.newFolder, "");
+        if (!name) return;
+        try {
+          const data = await postJSON("/api/folders", { name });
+          insertRow(folderRowHtml(data.folder_id, data.name || name, 0, Date.now() / 1000, false));
+          window.toast(S.mkdirOk);
+        } catch { window.toast(S.mkdirFail); }
+      });
+    });
+
+    // 公開「建立資料夾」：建好直接開資料夾頁
+    document.querySelectorAll("[data-create-folder]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        btn.loading = true;
+        try {
+          const host = btn.closest(".card-pad") || btn.parentElement;
+          const name = host ? fieldValue(host, "mkdir-name") : "";
+          const res = await fetch("/api/public/folder", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(name ? { name } : {}),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || "x");
+          window.location.href = data.folder_url;   // 開啟資料夾頁（不留在原頁）
+        } catch { window.toast(S.folderFail); }
+        finally { btn.loading = false; }
+      });
+    });
+
+    // 從網址上傳
+    document.querySelectorAll("[data-url-upload]").forEach((btn) => {
+      btn.addEventListener("click", () => uploadFromUrl(btn));
+    });
+
+    // 全域委派：複製 / 預覽 / 打包 zip / 開資料夾 / 改名 / 分享 / 刪除
+    // （列是動態插入的，統一委派才不會漏）
+    document.addEventListener("click", async (ev) => {
+      const hit = (sel) => ev.target && ev.target.closest ? ev.target.closest(sel) : null;
+      const cp = hit("[data-copy]");
+      if (cp) { copyText(cp.getAttribute("data-copy")); return; }
+      const pv = hit("[data-preview]");
+      if (pv) { preview(pv.getAttribute("data-preview"), pv.getAttribute("data-name") || ""); return; }
+      const zip = hit("[data-zip]");
+      if (zip) { window.location.href = zip.getAttribute("data-zip"); return; }
+      const opener = hit("[data-open]");
+      if (opener) { ev.preventDefault(); ev.stopPropagation(); window.location.href = opener.getAttribute("data-open"); return; }
+
+      // 改名：資料夾
+      const rn = hit("[data-rename]");
+      if (rn) {
+        ev.preventDefault(); ev.stopPropagation();
+        const id = rn.getAttribute("data-rename");
+        const isPublic = rn.getAttribute("data-public") === "1";
+        const name = await askName(S.rename, rn.getAttribute("data-name") || "");
         if (!name) return;
         try {
           await postJSON(isPublic ? "/api/public/folder/rename" : "/api/folders/rename",
             { folder_id: id, name });
+          const row = rn.closest("mdui-list-item.frow");
+          if (row) {
+            row.setAttribute("data-name", name);
+            row.setAttribute("data-droplabel", name);
+            row.setAttribute("data-sort-name", String(name).toLowerCase());
+            const fname = row.querySelector("a.fname, .fname");
+            if (fname) fname.textContent = name;
+            const dl = row.querySelector("[data-name]");
+            if (dl) dl.setAttribute("data-name", name);
+          }
           window.toast(S.renameOk);
-          window.location.reload();
         } catch { window.toast(S.renameFail); }
-      });
-    });
+        return;
+      }
 
-    // 改名：檔案列上的筆。只改顯示名稱，id 與位元組不動。
-    document.querySelectorAll("[data-rename-file]").forEach((btn) => {
-      btn.addEventListener("click", async (ev) => {
-        ev.preventDefault();
-        ev.stopPropagation();
-        const name = await askName(S.rename, btn.getAttribute("data-name") || "");
-        if (!name) return;
+      // 改名：檔案
+      const rn2 = hit("[data-rename-file]");
+      if (rn2) {
+        ev.preventDefault(); ev.stopPropagation();
+        const name2 = await askName(S.rename, rn2.getAttribute("data-name") || "");
+        if (!name2) return;
         try {
-          await postJSON(btn.getAttribute("data-public") === "1"
+          await postJSON(rn2.getAttribute("data-public") === "1"
             ? "/api/public/file/rename" : "/api/files/rename",
-            { file_id: btn.getAttribute("data-rename-file"), name,
-              folder_id: btn.getAttribute("data-in-folder") || null });
+            { file_id: rn2.getAttribute("data-rename-file"), name: name2,
+              folder_id: rn2.getAttribute("data-in-folder") || null });
+          const row = rn2.closest("mdui-list-item");
+          if (row) {
+            row.setAttribute("data-name", name2);
+            row.setAttribute("data-sort-name", String(name2).toLowerCase());
+            const fname = row.querySelector(".fname");
+            if (fname) fname.textContent = name2;
+            row.querySelectorAll("[data-name]").forEach((b) => b.setAttribute("data-name", name2));
+          }
           window.toast(S.renameOk);
-          window.location.reload();
         } catch { window.toast(S.renameFail); }
-      });
-    });
+        return;
+      }
 
-    // 私人資料夾分享連結：建立 / 取消
-    document.querySelectorAll("[data-share-create]").forEach((btn) => {
-      btn.addEventListener("click", async () => {
+      // 分享（無列變化，只提示）
+      const sc = hit("[data-share-create]");
+      if (sc) {
         try {
-          const res = await fetch(`/api/folders/${btn.getAttribute("data-share-create")}/share`, {
+          const res = await fetch(`/api/folders/${sc.getAttribute("data-share-create")}/share`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ mode: btn.getAttribute("data-mode") || "view" }),
+            body: JSON.stringify({ mode: sc.getAttribute("data-mode") || "view" }),
           });
           if (!res.ok) throw new Error("HTTP " + res.status);
           window.toast(S.shareOk);
-          window.location.reload();
         } catch { window.toast(S.mkdirFail); }
-      });
-    });
-    document.querySelectorAll("[data-unshare]").forEach((btn) => {
-      btn.addEventListener("click", async () => {
+        return;
+      }
+      const un = hit("[data-unshare]");
+      if (un) {
         if (!window.confirm(CONFIRM.unshare[key])) return;
         try {
           const res = await fetch("/api/share/revoke", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ token: btn.getAttribute("data-unshare") }),
+            body: JSON.stringify({ token: un.getAttribute("data-unshare") }),
           });
           if (!res.ok) throw new Error("HTTP " + res.status);
           window.toast(S.unshareOk);
           window.location.reload();
         } catch { window.toast(S.unshareFail); }
-      });
-    });
+        return;
+      }
 
-    // 刪除私人資料夾（含其中的檔案）。用 POST 才不會跳出目前的資料夾。
-    document.querySelectorAll("[data-delete-dir]").forEach((btn) => {
-      btn.addEventListener("click", async (ev) => {
-        ev.preventDefault();
-        ev.stopPropagation();
-        const name = btn.getAttribute("data-name") || "";
-        const count = btn.getAttribute("data-count") || "0";
-        if (!window.confirm(folderConfirm(name, count))) return;
+      // 刪除資料夾（私有／公開）
+      const ddir = hit("[data-delete-dir], [data-delpubdir]");
+      if (ddir) {
+        ev.preventDefault(); ev.stopPropagation();
+        const name = ddir.getAttribute("data-name") || "";
+        const count = ddir.getAttribute("data-count") || "0";
+        const isPub = ddir.hasAttribute("data-delpubdir");
+        if (!window.confirm(isPub ? pubFolderConfirm(name, count) : folderConfirm(name, count))) return;
         try {
-          const res = await fetch(btn.getAttribute("data-delete-dir"), { method: "POST" });
+          const res = await fetch(ddir.getAttribute(isPub ? "data-delpubdir" : "data-delete-dir"), { method: "POST" });
           if (!res.ok) throw new Error("HTTP " + res.status);
+          const row = ddir.closest("mdui-list-item.frow");
+          if (row) {
+            const card = row.closest(".card-pad");
+            const list = row.closest("mdui-list.file-list");
+            row.remove();
+            updateHeadCount(card, -1);
+            if (list && !list.children.length) {
+              list.remove();
+              const mark = document.createElement("mdui-card");
+              mark.setAttribute("variant", "filled");
+              mark.className = "empty";
+              mark.textContent = S.emptyFiles;
+              card.appendChild(mark);
+            }
+          }
           window.toast(S.deleted);
-          window.location.reload();
         } catch { window.toast(S.deleteFail); }
-      });
-    });
+        return;
+      }
 
-    // 刪除公開資料夾（管理員）
-    document.querySelectorAll("[data-delpubdir]").forEach((btn) => {
-      btn.addEventListener("click", async (ev) => {
-        ev.preventDefault();
-        ev.stopPropagation();
-        const name = btn.getAttribute("data-name") || "";
-        const count = btn.getAttribute("data-count") || "0";
-        if (!window.confirm(pubFolderConfirm(name, count))) return;
-        try {
-          const res = await fetch(btn.getAttribute("data-delpubdir"), { method: "POST" });
-          if (!res.ok) throw new Error("HTTP " + res.status);
-          window.toast(S.deleted);
-          window.location.reload();
-        } catch { window.toast(S.deleteFail); }
-      });
-    });
-
-    // 刪除確認
-    document.querySelectorAll("[data-delete]").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const name = btn.getAttribute("data-name") || "";
+      // 刪除檔案
+      const del = hit("[data-delete]");
+      if (del) {
+        const name = del.getAttribute("data-name") || "";
         if (!window.confirm(fileConfirm(name))) return;
-        if (btn.hasAttribute("data-delete-post")) {
+        if (del.hasAttribute("data-delete-post")) {
           try {
-            const res = await fetch(btn.getAttribute("data-delete"), { method: "POST" });
+            const res = await fetch(del.getAttribute("data-delete"), { method: "POST" });
             if (!res.ok) throw new Error("HTTP " + res.status);
+            const row = del.closest("mdui-list-item");
+            if (row) {
+              const scope = row.getAttribute("data-scope") || "private";
+              const from = row.getAttribute("data-from") || "";
+              afterRowGone(row);
+              if (from) adjustFolderCount(scope, from, -1);
+            }
             window.toast(S.deleted);
-            window.location.reload();
           } catch { window.toast(S.deleteFail); }
           return;
         }
-        window.location.href = btn.getAttribute("data-delete");
-      });
+        window.location.href = del.getAttribute("data-delete");
+        return;
+      }
+
+      // 並行下載
+      const mtb = hit("[data-mt-download]");
+      if (mtb) { mtDownload(mtb); return; }
+
+      // 點資料夾列本身（不是鈕）→ 開資料夾
+      const frow = hit("mdui-list-item.frow");
+      if (frow && !ev.target.closest("mdui-button, mdui-button-icon, a, input")) {
+        const link = frow.querySelector("a.fname");
+        if (link) window.location.href = link.getAttribute("href");
+      }
     });
 
     // 程式碼區塊複製鈕
@@ -953,28 +1228,32 @@
       wrap.appendChild(btn);
     });
 
-    // 檔案排序：時間 / 大小 / 名稱
+    // 檔案排序：時間 / 大小 / 名稱。資料夾（.frow）永遠排最前面。
     document.querySelectorAll("[data-sortbar]").forEach((bar) => {
       const host = bar.closest(".card-pad") || bar.parentElement;
       const list = host ? host.querySelector("mdui-list") : null;
       if (!list) return;
       const btns = bar.querySelectorAll("[data-sort-by]");
       const dirBtn = bar.querySelector("[data-sort-dir]");
+      const cmp = (a, b) => {
+        const by = bar.getAttribute("data-by") || "time";
+        if (by === "name") {
+          const x = a.getAttribute("data-sort-name") || "", y = b.getAttribute("data-sort-name") || "";
+          return x < y ? -1 : x > y ? 1 : 0;
+        }
+        return parseFloat(a.getAttribute("data-sort-" + by) || "0") - parseFloat(b.getAttribute("data-sort-" + by) || "0");
+      };
       const apply = () => {
         const by = bar.getAttribute("data-by") || "time";
         const desc = (bar.getAttribute("data-dir") || "desc") === "desc";
         const items = Array.from(list.querySelectorAll("mdui-list-item"));
-        items.sort((a, b) => {
-          let r;
-          if (by === "name") {
-            const x = a.getAttribute("data-sort-name") || "", y = b.getAttribute("data-sort-name") || "";
-            r = x < y ? -1 : x > y ? 1 : 0;
-          } else {
-            r = parseFloat(a.getAttribute("data-sort-" + by) || "0") - parseFloat(b.getAttribute("data-sort-" + by) || "0");
-          }
-          return desc ? -r : r;
-        });
-        items.forEach((el) => list.appendChild(el));
+        const folders = items.filter((el) => el.classList.contains("frow"));
+        const files = items.filter((el) => !el.classList.contains("frow"));
+        const wrap = desc ? -1 : 1;
+        folders.sort((a, b) => wrap * cmp(a, b));
+        files.sort((a, b) => wrap * cmp(a, b));
+        folders.forEach((el) => list.appendChild(el));
+        files.forEach((el) => list.appendChild(el));
         btns.forEach((b) => b.setAttribute("variant", b.getAttribute("data-sort-by") === by ? "filled" : "text"));
         if (dirBtn) dirBtn.setAttribute("icon", desc ? "arrow_downward" : "arrow_upward");
       };
@@ -984,35 +1263,6 @@
         apply();
       });
       apply();
-    });
-
-    // 建立資料夾（有結果框就地顯示，否則跳轉）
-    document.querySelectorAll("[data-create-folder]").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        btn.loading = true;
-        try {
-          const host = btn.closest(".card-pad") || btn.parentElement;
-          const name = host ? fieldValue(host, "mkdir-name") : "";
-          const res = await fetch("/api/public/folder", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(name ? { name } : {}),
-          });
-          const data = await res.json();
-          const out = host ? host.querySelector("[data-upload-result]") : null;
-          if (out) {
-            out.innerHTML = resultCard(S.folderCreated, "", data.folder_name || S.idle, [
-              linkRow(S.rowLink, data.folder_url,
-                `<a href="${esc(data.folder_url)}"><mdui-button variant="text">${esc(S.open)}</mdui-button></a>` +
-                `<mdui-button variant="text" data-copy="${esc(data.folder_url)}">${esc(S.copy)}</mdui-button>`),
-            ]);
-            window.toast(S.folderMade);
-          } else {
-            window.location.href = data.folder_url;
-          }
-        } catch { window.toast(S.folderFail); }
-        finally { btn.loading = false; }
-      });
     });
   });
 })();

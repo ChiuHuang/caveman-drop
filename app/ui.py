@@ -59,20 +59,17 @@ def nav_items(lang: str, active: str, authed: bool, solo: bool = False) -> list[
     if solo:
         # A private-only host: sign in, drive, sign out. Nothing public.
         if authed:
-            return [("home", t(lang, "drive_title"), "/", "folder"),
-                    ("logout", t(lang, "nav_logout"), "/logout", "logout")]
-        return [("login", t(lang, "nav_login"), "/login", "login")]
+            return [("home", t(lang, "drive_title"), "/", "folder")]
+        return []
     items = [
         ("home", t(lang, "nav_home"), "/", "home"),
         ("api", t(lang, "nav_api"), "/api", "api"),
         ("docs", t(lang, "nav_docs"), "/docs", "menu_book"),
     ]
-    if authed:
-        # Private mode: no public upload entry after login.
-        items.append(("logout", t(lang, "nav_logout"), "/logout", "logout"))
-    else:
+    if not authed:
+        # Private mode: no public upload entry after login; sign in lives in
+        # the app bar, not the drawer.
         items.insert(1, ("upload", t(lang, "nav_upload"), "/upload", "upload"))
-        items.append(("login", t(lang, "nav_login"), "/login", "login"))
     return items
 
 
@@ -92,6 +89,18 @@ def page_footer(lang: str, extra_qs: str = "") -> str:
         f' title="{html.escape(t(lang, "lang_switch_tip"))}">'
         f'{html.escape(t(lang, "lang_zh"))}</a>'
         "</span></footer>"
+    )
+
+
+def auth_button(lang: str, authed: bool) -> str:
+    """Sign in / sign out lives in the app bar only, on every page."""
+    key, href, title = (
+        ("login", "/login", t(lang, "nav_login")) if not authed
+        else ("logout", "/logout", t(lang, "nav_logout"))
+    )
+    return (
+        f'<a href="{href}"><mdui-button-icon icon="{key}"'
+        f' title="{html.escape(title)}"></mdui-button-icon></a>'
     )
 
 
@@ -133,6 +142,7 @@ def page(
     <mdui-button-icon id="nav-toggle" icon="menu"></mdui-button-icon>
     <mdui-top-app-bar-title>CaveMan Drop</mdui-top-app-bar-title>
     <div style="flex-grow:1"></div>
+    {auth_button(lang, authed)}
     <mdui-button-icon id="theme-toggle" icon="dark_mode"></mdui-button-icon>
   </mdui-top-app-bar>
   <mdui-navigation-drawer id="nav-drawer" close-on-overlay-click>
@@ -364,11 +374,13 @@ def share_file_rows(lang: str, files: list[dict], token: str, base: str) -> str:
 
 def _private_upload_form(lang: str, folder_id: str = "") -> str:
     """The uploader that lives in the Drive toolbar. No card, no visible button:
-    the toolbar's Upload button opens the file picker on this input."""
+    the toolbar's Upload button opens the file picker on this input. A second,
+    whole-folder picker rides the same form (data-drive-dir in the toolbar)."""
     return f"""
           <form class="drive-upload" action="/api/upload_chunk" method="post"
                 data-chunked data-merge="/api/merge_chunks">
             <input type="file" name="file" multiple required class="visually-hidden">
+            <input type="file" name="dir_files" webkitdirectory class="visually-hidden" aria-hidden="true">
             <input type="hidden" name="folder_id" value="{html.escape(folder_id)}">
             {thread_panel(lang)}
             <div data-upload-result></div>
@@ -391,10 +403,13 @@ def folder_row(
     dragged here moves in, files dragged from the desktop upload into it.
     """
     href = base + "/f/" + fid if public else "/?folder=" + fid
+    zip_href = (base + "/zip/f/" + fid) if public else ("/zip/" + fid)
     if public:
         btns = (
-            f'<mdui-button-icon icon="open_in_new" data-copy="{html.escape(href)}"'
-            f' title="{html.escape(t(lang, "btn_copy_link"))}"></mdui-button-icon>'
+            f'<a href="{html.escape(href)}">'
+            f'<mdui-button-icon icon="open_in_new" title="{html.escape(t(lang, "btn_open"))}"></mdui-button-icon></a>'
+            f'<mdui-button-icon icon="archive" title="{html.escape(t(lang, "btn_zip"))}"'
+            f' data-zip="{html.escape(zip_href)}"></mdui-button-icon>'
             f'<mdui-button-icon icon="edit" data-rename="{html.escape(fid)}" data-name="{html.escape(name)}"'
             f' data-public="1" title="{html.escape(t(lang, "btn_rename"))}"></mdui-button-icon>'
             f'<mdui-button-icon icon="delete" data-delpubdir="{html.escape(base + "/delpubdir/" + fid)}"'
@@ -406,6 +421,8 @@ def folder_row(
         btns = (
             f'<mdui-button-icon icon="folder_open" data-open="{html.escape(href)}"'
             f' title="{html.escape(t(lang, "btn_open"))}"></mdui-button-icon>'
+            f'<mdui-button-icon icon="archive" title="{html.escape(t(lang, "btn_zip"))}"'
+            f' data-zip="{html.escape(zip_href)}"></mdui-button-icon>'
             f'<mdui-button-icon icon="link" data-share-create="{html.escape(fid)}" data-mode="view"'
             f' title="{html.escape(t(lang, "share_view_link"))}"></mdui-button-icon>'
             f'<mdui-button-icon icon="edit" data-rename="{html.escape(fid)}" data-name="{html.escape(name)}"'
@@ -417,6 +434,7 @@ def folder_row(
         scope = "private"
     return (
         f'<mdui-list-item class="frow" {_drop_attrs(scope, fid, name)}'
+        f' data-count="{count}"'
         f' data-sort-name="{html.escape(name.lower())}" data-sort-time="{float(ctime or 0)}"'
         f' data-sort-size="0">'
         '<mdui-icon slot="icon" name="folder"></mdui-icon>'
@@ -445,6 +463,8 @@ def _drive_head(lang: str, cur: str, cur_name: str, n: int, tools: bool = True) 
         f' title="{html.escape(t(lang, "drive_new_folder"))}"></mdui-button-icon>'
         f'<mdui-button-icon icon="cloud_upload" data-drive-upload'
         f' title="{html.escape(t(lang, "btn_upload"))}"></mdui-button-icon>'
+        f'<mdui-button-icon icon="drive_folder_upload" data-drive-dir'
+        f' title="{html.escape(t(lang, "btn_folder_upload"))}"></mdui-button-icon>'
         "</div>"
     ) if tools else ""
     return f"""
@@ -495,14 +515,14 @@ def drive_panel(
     for f in files:
         if f.get("folder"):
             counts[f["folder"]] = counts.get(f["folder"], 0) + 1
-    frows = "".join(
+    folder_rows = [
         folder_row(
             lang, fid, m.get("name") or t(lang, "unnamed_folder"), counts.get(fid, 0),
             m.get("ctime", 0), base, shares,
         )
         for fid, m in folders.items()
         if fid != current
-    )
+    ]
     prows = "".join(public_folder_row(lang, f, base) for f in public_folders)
     n_pub = len(public)
 
@@ -515,9 +535,9 @@ def drive_panel(
           {_private_upload_form(lang, current)}
           <mdui-card variant="outlined" class="card-pad"
             {_drop_attrs("private", current, cur_name or t(lang, "drive_title"))}>
-            {_drive_head(lang, current, cur_name, len(frows) + len(shown))}
+            {_drive_head(lang, current, cur_name, len(folder_rows) + len(shown))}
             {sort_bar(lang)}
-            {listing(frows + private_file_rows(lang, shown, base, wrap=False))}
+            {listing("".join(folder_rows) + private_file_rows(lang, shown, base, wrap=False))}
           </mdui-card>"""
     if solo:
         return f'<div class="drive" data-drive data-solo>{drive}</div>'
@@ -525,7 +545,7 @@ def drive_panel(
         <div data-tabpanel="public" hidden>
           {public_upload_form(lang=lang)}
           <mdui-card variant="outlined" class="card-pad">
-            {_drive_head(lang, "", t(lang, "tab_public_short"), len(prows) + n_pub, tools=False)}
+            {_drive_head(lang, "", t(lang, "tab_public_short"), len(public_folders) + n_pub, tools=False)}
             {sort_bar(lang)}
             {listing(prows + private_file_rows(lang, public, base, scope="public", wrap=False))}
           </mdui-card>
@@ -540,20 +560,18 @@ def drive_panel(
 
 
 def _upload_row(lang: str, folder: str | None = None) -> str:
-    """File picker row + optional folder/description fields, one per line."""
-    if folder:
-        field = f'<input type="hidden" name="folder" value="{html.escape(folder)}">'
-    else:
-        field = (
-            '<div class="upfield">'
-            f'<mdui-text-field name="folder" label="{html.escape(t(lang, "folder_field"))}"></mdui-text-field>'
-            "</div>"
-        )
+    """File row (picker + whole-folder picker) per line; folder id only via drop
+    target or the hidden field on a folder page."""
+    field = f'<input type="hidden" name="folder" value="{html.escape(folder or "")}">'
     label = t(lang, "btn_add_folder") if folder else t(lang, "btn_upload")
     return f"""
               <div class="form-row">
                 <input type="file" name="file" multiple required>
+                <input type="file" name="dir_files" webkitdirectory
+                       class="visually-hidden" aria-hidden="true">
                 <mdui-button type="submit" icon="cloud_upload">{html.escape(label)}</mdui-button>
+                <mdui-button variant="outlined" data-dir-pick icon="drive_folder_upload">
+                  {html.escape(t(lang, "btn_folder_upload"))}</mdui-button>
               </div>
               {field}
               <div class="upfield">
@@ -569,6 +587,11 @@ def public_upload_form(lang: str, folder_id: str | None = None) -> str:
               {_upload_row(lang, folder_id)}
               {thread_panel(lang)}
             </form>
+            <div class="form-row">
+              <mdui-text-field data-url-input label="{html.escape(t(lang, "url_field"))}"></mdui-text-field>
+              <mdui-button variant="outlined" data-url-upload icon="cloud_download">
+                {html.escape(t(lang, "btn_from_url"))}</mdui-button>
+            </div>
             <div data-upload-result></div>"""
     if folder_id:
         return form

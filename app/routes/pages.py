@@ -307,7 +307,8 @@ def _folder_html(request: Request, folder_id: str) -> HTMLResponse | None:
         <mdui-card variant="filled" class="card-pad hero">
           <h1>{html.escape(title)}</h1>
           <p>{html.escape(t(lang, "folder_public", n=len(files)))}
-          <mdui-button variant="text" data-copy="{base}/f/{folder_id}">{html.escape(t(lang, "copy_share"))}</mdui-button></p>
+          <mdui-button variant="text" data-copy="{base}/f/{folder_id}">{html.escape(t(lang, "copy_share"))}</mdui-button>
+          <a href="{base}/zip/f/{folder_id}"><mdui-button variant="text" icon="archive">{html.escape(t(lang, "btn_zip"))}</mdui-button></a></p>
         </mdui-card>
         <div class="stack">
           <mdui-card variant="outlined" class="card-pad">

@@ -16,6 +16,10 @@
 - `PRIVATE_ONLY_HOSTS`（預設 `pvf.chiuhuang.dev`）裡的網域只給登入用：`/` 未登入
   就是登入頁，登入後直接是雲端（沒有分頁、沒有公開介面），`/upload` 會導回 `/`。
   公開 JSON API 在那裡照常運作，腳本不受影響。
+- **整包下載**：資料夾可串流下載成 `.zip`（`/zip/f/{id}` 公開、`/zip/{id}` 私人），
+  邊打包邊傳、不落地。**從網址上傳**：`POST /api/public/upload_url` 讓伺服器透過
+  `PROXY_BASE_URL` 抓回 URL；匿名限速 60 Mbps、登入無限。
+- 短網址（`short_url`）預設指向 `USERCONTENT_HOST`（`usercontent.qiuhuang.dev`）。
 
 ## 快速開始
 

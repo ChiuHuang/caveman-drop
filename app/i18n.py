@@ -73,6 +73,12 @@ STRINGS: dict[str, dict[str, str]] = {
     "folder_name_field": {ZH: "資料夾名稱", EN: "Folder name"},
     "btn_create_folder": {ZH: "建立", EN: "Create"},
     "curl_h": {ZH: "curl 用法", EN: "curl"},
+    "btn_folder_upload": {ZH: "上傳整個資料夾", EN: "Upload folder"},
+    "url_field": {ZH: "檔案網址（https://…）", EN: "File URL (https://…)"},
+    "btn_from_url": {ZH: "從網址上傳", EN: "Upload from URL"},
+    "btn_zip": {ZH: "打包下載", EN: "Download .zip"},
+    "url_upload_fail": {ZH: "從網址上傳失敗：{err}", EN: "URL upload failed: {err}"},
+    "url_need": {ZH: "請先輸入檔案網址", EN: "Enter a file URL first"},
     "limits": {
         ZH: "單檔上限 {gb} GB・資料夾每 {mins} 分鐘合計上限 {fgb} GB・超量自動降速。",
         EN: "Up to {gb} GB per file · {fgb} GB per folder per {mins} min · throttled past that.",

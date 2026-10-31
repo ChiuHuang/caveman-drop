@@ -78,6 +78,18 @@ class Settings:
             if h.strip()
         )
     )
+    # Host that serves /usercontent short links (same app, CDN in front). Empty
+    # = short links stay on the request host.
+    usercontent_host: str = field(
+        default_factory=lambda: os.getenv("USERCONTENT_HOST", "usercontent.qiuhuang.dev")
+    )
+    # CORS proxy in front of this machine; URL uploads are fetched through it.
+    proxy_base_url: str = field(
+        default_factory=lambda: os.getenv("PROXY_BASE_URL", "https://proxy.chiuhuang.dev").rstrip("/")
+    )
+    # Cap for server-side URL uploads: Mbps for the anonymous fetch. Signed-in
+    # sessions are uncapped, like everything else private.
+    url_throttle_mbps: int = field(default_factory=lambda: _int("URL_THROTTLE_MBPS", 60))
     upload_dir: str = field(default_factory=lambda: os.getenv("UPLOAD_DIR", "airdrop_files"))
     tmp_dir: str = field(default_factory=lambda: os.getenv("TMP_DIR", "airdrop_tmp"))
     public_dir: str = field(default_factory=lambda: os.getenv("PUBLIC_DIR", "public_uploads"))

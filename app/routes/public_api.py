@@ -8,14 +8,17 @@ browsers. Downloads always stream bytes. File ids are the sha256 of the content
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import html
 import mimetypes
 import os
 import re
 from typing import Optional
+from urllib.parse import quote, urlsplit
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
 from ..config import settings
@@ -54,6 +57,7 @@ from ..storage import (
     validate_file_id,
     validate_public_id,
     validate_upload_id,
+    zip_stream_request,
 )
 from ..i18n import lang_for, t
 from ..ui import file_rows, fmt_size, page
@@ -129,9 +133,17 @@ def _file_meta(original_name: str, size: int, description: str = "") -> dict:
 
 
 def _short_url(base: str, file_id: str, ext: str) -> str:
-    """catbox-style share link: /usercontent/<short code>.<ext> (CDN-cacheable)."""
+    """catbox-style share link: /usercontent/<short code>.<ext> (CDN-cacheable).
+
+    When USERCONTENT_HOST is set (the default deployment), the link points at
+    that CDN host instead of the serving host, so the copy button hands out the
+    shortest, cacheable URL by default."""
     code = short_code(file_id)
-    return f"{base}/usercontent/{code}{ext}" if code else ""
+    if not code:
+        return ""
+    if settings.usercontent_host:
+        return f"https://{settings.usercontent_host}/usercontent/{code}{ext}"
+    return f"{base}/usercontent/{code}{ext}"
 
 
 @router.post("/api/public/upload")
@@ -548,3 +560,176 @@ async def public_download(request: Request, folder_id: str, file_id: str, previe
     path = payload_path(file_id, fdir, meta.get("ext", ""))
     ctype = meta.get("content_type") if preview else None
     return stream_download(request, path, meta["filename"], inline=preview, content_type=ctype)
+
+
+class UrlUploadPayload(BaseModel):
+    url: str
+    folder: Optional[str] = None
+    description: str = ""
+
+
+def _filename_from_url(url: str, content_type: str | None) -> str:
+    """Best-effort name: the URL's last path segment, else a probe of the type."""
+    try:
+        path = urlsplit(url).path
+        name = os.path.basename(path)
+    except ValueError:
+        name = ""
+    name = name.replace("%2F", "") or ""
+    name = clean_name(name, 120).lstrip(".\u0085\u2028\u2029")
+    if not name:
+        guessed = mimetypes.guess_extension((content_type or "").split(";")[0].strip())
+        name = "file" + (guessed or "")
+    return name
+
+
+@router.post("/api/public/upload_url")
+async def public_upload_from_url(request: Request, payload: UrlUploadPayload):
+    """Fetch a URL (through PROXY_BASE_URL) and file the bytes as a public upload.
+
+    The server does the downloading, so no browser fetch/CORS limits apply; the
+    transfer is throttled to URL_THROTTLE_MBPS for anonymous callers and left
+    uncapped for a signed-in session. `folder` works like /api/public/upload.
+    """
+    import httpx
+
+    ip = client_ip(request)
+    check_rate_limit(ip)
+    url = (payload.url or "").strip()
+    if not re.match(r"^https?://\S+$", url, re.IGNORECASE):
+        raise HTTPException(400, "Provide an http(s) URL")
+    target = f"{settings.proxy_base_url}/{url}"
+
+    dest = os.path.join(settings.tmp_dir, f"url_{os.getpid()}_{os.urandom(6).hex()}")
+    digest = hashlib.sha256()
+    written = 0
+    # Anonymous callers are throttled to URL_THROTTLE_MBPS; signed-in is free.
+    rate = 0 if request.session.get("auth") else settings.url_throttle_mbps * 125_000
+    fname_type = ""
+    imported = None
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=httpx.Timeout(60, read=120)) as cl:
+            async with cl.stream("GET", target) as resp:
+                if resp.status_code >= 400:
+                    raise HTTPException(400, f"Source returned HTTP {resp.status_code}")
+                cd = resp.headers.get("content-disposition", "")
+                imported = re.search(
+                    r"filename\*=UTF-8'([^']*)'([^;]+)|filename=\"([^\"]+)\"|filename=([^;\s]+)",
+                    cd, re.I,
+                )
+                fname_type = resp.headers.get("content-type", "")
+                loop = asyncio.get_running_loop()
+                slot = 0.0
+                with open(dest, "wb") as out:
+                    async for chunk in resp.aiter_bytes(512 * 1024):
+                        if not chunk:
+                            continue
+                        written += len(chunk)
+                        if written > settings.max_file_size:
+                            raise HTTPException(
+                                413, f"File exceeds the {settings.max_file_size // 1024**3}GB per-file limit"
+                            )
+                        digest.update(chunk)
+                        out.write(chunk)
+                        if rate:
+                            now = loop.time()
+                            slot = max(slot, now) + len(chunk) / rate
+                            if slot - now > 0:
+                                await asyncio.sleep(min(slot - now, 5))
+        file_id = digest.hexdigest()
+        deduped = os.path.exists(bin_path(file_id))
+        store_blob(dest, file_id)
+    except HTTPException:
+        if os.path.exists(dest):
+            os.remove(dest)
+        raise
+    except (httpx.HTTPError, OSError):
+        if os.path.exists(dest):
+            os.remove(dest)
+        raise HTTPException(400, "Could not fetch that URL through the proxy")
+
+    def _cd_name(match: re.Match | None) -> str:
+        """RFC 5987 first (`filename*=UTF-8''...`), then plain filename=."""
+        if not match:
+            return ""
+        if match.group(1) is not None:
+            from urllib.parse import unquote
+
+            return clean_name(unquote(match.group(1)), 120)
+        return clean_name(match.group(3) or match.group(2) or "", 120)
+
+    name = _cd_name(imported) or _filename_from_url(url, fname_type)
+    _, ext = os.path.splitext(name)
+    ext = ext[:32] if re.fullmatch(r"\.[A-Za-z0-9._-]+", ext or "") else ""
+    meta = {
+        "filename": name,
+        "ext": ext,
+        "content_type": fname_type.split(";")[0].strip() or mimetypes.guess_type(name)[0] or "application/octet-stream",
+        "size": written,
+        "description": clean_name(payload.description, 200),
+    }
+    base = base_url(request)
+    if payload.folder:
+        folder_id = resolve_public_folder(payload.folder, t(lang_for(request), "unnamed_folder"))
+        validate_public_id(folder_id, "folder id")
+        save_entry(public_folder_dir(folder_id), file_id, meta)
+        download_url = f"{base}/dl/pub/{folder_id}/{file_id}"
+        return {
+            "success": True,
+            "folder_id": folder_id,
+            "folder_name": public_folder_name(folder_id),
+            "file_id": file_id,
+            "filename": name,
+            "description": meta["description"],
+            "size_bytes": written,
+            "content_type": meta["content_type"],
+            "deduplicated": deduped,
+            "short_url": _short_url(base, file_id, ext),
+            "url": download_url,
+            "download_url": download_url,
+            "folder_url": f"{base}/f/{folder_id}",
+            "share_url": f"{base}/f/{folder_id}",
+            "folder_api_url": f"{base}/api/public/folder/{folder_id}",
+            "file_api_url": f"{base}/api/public/file/{folder_id}/{file_id}",
+        }
+    save_entry(settings.single_dir, file_id, meta)
+    download_url = f"{base}/dl/s/{file_id}"
+    return {
+        "success": True,
+        "file_id": file_id,
+        "filename": name,
+        "description": meta["description"],
+        "size_bytes": written,
+        "content_type": meta["content_type"],
+        "deduplicated": deduped,
+        "short_url": _short_url(base, file_id, ext),
+        "url": download_url,
+        "download_url": download_url,
+        "file_api_url": f"{base}/api/public/single/{file_id}",
+    }
+
+
+@router.get("/zip/f/{folder_id}")
+async def zip_public_folder(request: Request, folder_id: str):
+    """Whole public folder as a live-streamed .zip: built on the fly, never on
+    disk, so nothing is deleted afterwards — the stream simply ends."""
+    fdir = public_folder_dir(folder_id)
+    if not os.path.isdir(fdir):
+        raise HTTPException(404, "Folder not found")
+    entries = []
+    for f in public_folder_files(folder_id):
+        p = payload_path(f["id"], fdir, f.get("ext", ""))
+        if os.path.exists(p):
+            entries.append((f["name"], p))
+    if not entries:
+        raise HTTPException(404, "Folder is empty")
+    fname = f"{clean_name(public_folder_name(folder_id), 60) or 'folder'}.zip"
+    start, build = zip_stream_request(entries)
+    fail: list = []
+    start(fail)
+    return StreamingResponse(
+        build(fail),
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(fname)}"},
+    )
+

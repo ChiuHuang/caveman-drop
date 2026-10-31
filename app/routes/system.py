@@ -99,8 +99,34 @@ def _api_payload(request: Request) -> dict:
                     "catbox-style short link: the shortest unique prefix of the file's sha256, "
                     "6 characters (7, 8 … when a different file shares those characters). "
                     "Immutable Cache-Control, so a CDN in front can cache it. Public files only. "
-                    "Returned as `short_url` by every upload and listing response."
+                    "Returned as `short_url` by every upload and listing response. In the default "
+                    "deployment the host is USERCONTENT_HOST (usercontent.qiuhuang.dev), not this one."
                 ),
+            },
+            "upload_from_url": {
+                "method": "POST",
+                "url": f"{base}/api/public/upload_url",
+                "body": {"url": "https://example.com/file.jpg", "folder": "<id or new name (optional)>", "description": "(optional)"},
+                "notes": (
+                    "Server-side fetch: the server downloads the URL through PROXY_BASE_URL and "
+                    "files it like an ordinary public upload (same folder field rules). "
+                    "Anonymous callers are capped at URL_THROTTLE_MBPS (default 60 Mbps); "
+                    "a signed-in session is uncapped. Same JSON response as /api/public/upload."
+                ),
+            },
+            "folder_zip": {
+                "method": "GET",
+                "url": f"{base}/zip/f/{{folder_id}}",
+                "notes": (
+                    "Download an entire public folder as one .zip, streamed live — the archive "
+                    "is built in memory step by step and never written to disk. Files without "
+                    "subdirectories; duplicate names get a ' (1)' style suffix."
+                ),
+            },
+            "folder_zip_private": {
+                "method": "GET",
+                "url": f"{base}/zip/{{folder_id}}",
+                "notes": "Same as /zip/f/{{folder_id}} but for a private drive folder; needs a signed-in session.",
             },
             "upload_page": {
                 "method": "GET",
@@ -277,6 +303,18 @@ GET {base}/api/public/file/{{folder_id}}/{{file_id}}
 ## Download
 GET {base}/dl/pub/{{folder_id}}/{{file_id}}
 Supports HTTP Range requests.
+
+## Download a whole folder as .zip
+GET {base}/zip/f/{{folder_id}}          (public folder)
+GET {base}/zip/{{folder_id}}            (private folder, signed-in only)
+Streamed live; the archive is built in memory and never written to disk.
+
+## Upload from a URL (server-side fetch)
+POST {base}/api/public/upload_url
+JSON: {{"url": "https://example.com/file.jpg", "folder": "<id or new name (optional)>", "description": "(optional)"}}
+The server fetches the URL through its proxy and files the bytes like an
+ordinary public upload (same `folder` rules and response shape). Anonymous
+calls are throttled to 60 Mbps by default; a signed-in session is uncapped.
 
 ## Human upload/share page
 GET {base}/upload

@@ -9,7 +9,7 @@ import uuid
 from typing import Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel
 
 from ..config import settings
@@ -55,11 +55,13 @@ from ..storage import (
     tag_ip,
     tagged_threads,
     validate_upload_id,
+    zip_stream_request,
 )
 from ..i18n import lang_for, t
 from ..ui import drive_panel, page, share_file_rows, thread_panel
 from ..auth import authed, query_auth_ok
 from ..urls import base_url
+from urllib.parse import quote
 
 router = APIRouter()
 
@@ -608,6 +610,33 @@ async def view_file(file_id: str):
     if not os.path.exists(path):
         raise HTTPException(404)
     return FileResponse(path, filename=meta["filename"])
+
+
+@router.get("/zip/{folder_id}")
+async def zip_private_folder(request: Request, folder_id: str):
+    """Whole private folder as a live-streamed .zip (admin session like /api)."""
+    _need_admin(request)
+    name = get_private_folders().get(folder_id, {}).get("name")
+    if not name:
+        raise HTTPException(404, "Folder not found")
+    entries = []
+    for f in private_files():
+        if f.get("folder") != folder_id:
+            continue
+        p = payload_path(f["id"], settings.upload_dir, f.get("ext", ""))
+        if os.path.exists(p):
+            entries.append((f["name"], p))
+    if not entries:
+        raise HTTPException(404, "Folder is empty")
+    fname = f"{clean_name(name, 60) or 'folder'}.zip"
+    start, build = zip_stream_request(entries)
+    fail: list = []
+    start(fail)
+    return StreamingResponse(
+        build(fail),
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(fname)}"},
+    )
 
 
 @router.api_route("/del/{file_id}", methods=["GET", "POST"])

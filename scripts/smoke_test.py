@@ -273,6 +273,16 @@ d = c.get(f"/dl/pub/{folder}/{jfid}", headers=J)
 assert d.status_code == 200 and d.content == b"joined"
 print("folder download OK")
 
+# --- whole folder as a streamed .zip (public + private) + short_url host ---
+zc = c.get(f"/zip/f/{folder}", headers=J)
+assert zc.status_code == 200 and zc.content[:2] == b"PK", "public zip must be a zip"
+assert b"j.txt" in zc.content
+assert "attachment" in zc.headers["content-disposition"], zc.headers.get("content-disposition")
+f2b = c.post("/api/public/upload", headers=J, files={"file": ("j.txt", b"dup!")}, data={"folder": folder})
+assert f2b.json()["short_url"].startswith("https://usercontent.qiuhuang.dev/usercontent/"), \
+    f2b.json().get("short_url")
+print("public zip + short_url host OK")
+
 h = c.get(f"/f/{folder}", headers=B)
 assert "Public folder" in h.text and "Add files to this folder" in h.text
 assert "派對" in h.text and "<code>" not in h.text
@@ -555,6 +565,24 @@ assert anon2.post("/api/public/folder/rename", headers=J,
                   json={"folder_id": folder, "name": "x"}).status_code == 401
 print("drive folders: rename + open + drop targets OK")
 
+# --- private folder zip: auth required, then PK magic with the file inside ---
+zp = anon2.get(f"/zip/{pfolder}", headers=J)
+assert zp.status_code == 401, "private zip without a session must be 401"
+zp = c.get(f"/zip/{pfolder}", headers=J)
+zp = c.get(f"/zip/{pfolder}")
+assert zp.status_code == 200 and zp.content[:2] == b"PK", "private zip must be a zip"
+assert b"w.txt" in zp.content
+assert b"data" in zp.content
+# URL upload: bogus source → clean 400, no crash
+uu = c.post("/api/public/upload_url", headers=J, json={"url": "not a url"})
+assert uu.status_code == 400, uu.status_code
+uu = c.post("/api/public/upload_url", headers=J, json={"url": "https://nxd.invalid/nope.bin"})
+assert uu.status_code == 400, uu.status_code
+uu = c.post("/api/public/upload_url", headers=J,
+            json={"url": "http://localhost:0/x", "folder": folder})
+assert uu.status_code == 400, uu.status_code
+print("private zip + upload_url errors OK")
+
 # --- rename a file: display name only, id and bytes stay ---
 rf = c.post("/api/files/rename", headers=J, json={"file_id": wfid, "name": "renamed.txt"})
 assert rf.status_code == 200 and rf.json()["name"] == "renamed.txt"
@@ -562,6 +590,14 @@ assert c.get(f"/dl/{wfid}", headers=J).content == b"data", "bytes must survive a
 assert "renamed.txt" in c.get(f"/?folder={pfolder}", headers=B).text
 assert c.get("/api/files", headers=J).json()["files"][0]["id"] == wfid
 assert c.post("/api/files/rename", headers=J, json={"file_id": "nope", "name": "x"}).status_code == 404
+# a non-latin-1 name must not blow up the response header (latin-1 only!)
+rf = c.post("/api/files/rename", headers=J, json={"file_id": wfid, "name": "工作 renamed.txt"})
+assert rf.status_code == 200
+dl = c.get(f"/dl/{wfid}", headers=J)
+assert dl.status_code == 200 and dl.content == b"data", "non-ASCII filename must still download"
+assert "filename*=" in dl.headers["content-disposition"], dl.headers.get("content-disposition")
+rf = c.post("/api/files/rename", headers=J, json={"file_id": wfid, "name": "renamed.txt"})
+assert rf.status_code == 200
 # public file rename, located by its folder
 pfile = c.get(f"/api/public/folder/{folder}", headers=J).json()["files"][0]
 rf = c.post("/api/public/file/rename", headers=J,
