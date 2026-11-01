@@ -298,25 +298,34 @@ def _folder_html(request: Request, folder_id: str) -> HTMLResponse | None:
         "both": t(lang, "perm_both"),
     }
     this_perm = perm_bits.get(gate["perm"], gate["perm"])
-    manage = ""
+    share_url = f"{base}/f/{folder_id}"
+    share_card = ""
     if owned:
-        # The permission switcher stays tucked away behind the share button;
-        # pressing it unfolds the list of what non-owners may do.
-        manage = (
-            '<div class="perm-row">'
-            f'<mdui-button variant="outlined" icon="share" data-perm-toggle>'
-            f'{html.escape(t(lang, "btn_share"))}</mdui-button>'
-            '<div data-perm-row hidden>'
-            f'<span class="muted">{html.escape(t(lang, "perm_mine"))}</span>'
-            + "".join(
-                f'<mdui-button variant="{"filled" if gate["perm"] == p else "text"}"'
-                f' data-perm-set="{p}" data-folder="{html.escape(folder_id)}"'
-                f' data-name="{html.escape(title)}">{html.escape(label)}</mdui-button>'
-                for p, label in perm_bits.items()
-            )
-            + "</div>"
-            "</div>"
+        perm_buttons = "".join(
+            f'<mdui-button variant="{"filled" if gate["perm"] == p else "text"}"'
+            f' data-perm-set="{p}" data-folder="{html.escape(folder_id)}"'
+            f' data-name="{html.escape(title)}">{html.escape(label)}</mdui-button>'
+            for p, label in perm_bits.items()
         )
+        share_card = f"""
+          <mdui-card variant="outlined" class="card-pad">
+            <mdui-button variant="outlined" icon="share" data-perm-toggle>{html.escape(t(lang, "btn_share"))}</mdui-button>
+            <div class="share-list" data-share-list hidden>
+              <div class="share-row">
+                <span class="muted">{html.escape(t(lang, "share_link"))}</span>
+                <code class="share-url">{html.escape(share_url)}</code>
+                <mdui-button variant="text" data-copy="{share_url}">{html.escape(t(lang, "copy_share"))}</mdui-button>
+              </div>
+              <div class="share-row">
+                <span class="muted">{html.escape(t(lang, "qr_label"))}</span>
+                <img class="share-qr" alt="QR" data-qr="{share_url}" width="180" height="180">
+              </div>
+              <div class="share-row" data-perm-row>
+                <span class="muted">{html.escape(t(lang, "perm_mine"))}</span>
+                {perm_buttons}
+              </div>
+            </div>
+          </mdui-card>"""
     body_cards = []
     if can_read:
         body_cards.append(
@@ -349,11 +358,10 @@ def _folder_html(request: Request, folder_id: str) -> HTMLResponse | None:
           <p>{html.escape(t(lang, "folder_public", n=len(files)))}
           <mdui-button variant="text" data-copy="{base}/f/{folder_id}">{html.escape(t(lang, "copy_share"))}</mdui-button>
           {zip_btn}</p>
-          {manage}
           <p class="muted" data-perm-note data-prefix="{html.escape(perm_prefix)}">{html.escape(perm_prefix + this_perm)}</p>
         </mdui-card>
         <div class="stack">
-          {"".join(body_cards)}
+          {share_card}{"".join(body_cards)}
         </div>""",
         active="upload",
         authed=is_signed_in,

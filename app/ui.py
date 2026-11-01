@@ -164,6 +164,7 @@ def page(
   </mdui-layout-main>
 </mdui-layout>
 <mdui-snackbar id="toast" close-on-outside-click></mdui-snackbar>
+<script src="/static/qr.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>"""

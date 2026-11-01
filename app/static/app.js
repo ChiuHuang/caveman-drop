@@ -45,7 +45,7 @@
       urlNeed: "請先輸入檔案網址", urlFail: "從網址上傳失敗：", urlUp: "從網址上傳",
       permPick: "非擁有者的權限", permReadonly: "只能讀取", permUpload: "只能上傳",
       permBoth: "讀取＋上傳", sharePick: "分享連結的權限", permOk: "已更新權限",
-      shareMode: "分享連結",
+      shareMode: "分享連結", qrTitle: "分享 QR 碼",
     },
     en: {
       copied: "Link copied", copyFail: "Copy failed", needFile: "Pick a file first",
@@ -79,7 +79,7 @@
       urlNeed: "Enter a file URL first", urlFail: "URL upload failed: ", urlUp: "URL upload",
       permPick: "Permission for others", permReadonly: "Read only", permUpload: "Upload only",
       permBoth: "Read + upload", sharePick: "Link access", permOk: "Permission updated",
-      shareMode: "Share link",
+      shareMode: "Share link", qrTitle: "Share QR code",
     },
   };
   const S = T[LANG === "zh-TW" ? "zh" : "en"];
@@ -657,6 +657,35 @@
     } finally { btn.loading = false; }
   }
 
+  // ---- QR：分享連結畫成 QR（qrcode-generator，見 /static/qr.js）----
+  function qrSrc(url) {
+    try {
+      const qr = qrcode(0, "L");
+      qr.addData(url);
+      qr.make();
+      return qr.createDataURL(8, 16);
+    } catch { return ""; }
+  }
+
+  function showQR(url, headline) {
+    const src = qrSrc(url);
+    if (!src) return;
+    const dlg = document.createElement("mdui-dialog");
+    dlg.setAttribute("headline", headline || S.qrTitle);
+    dlg.innerHTML = `<div style="text-align:center">
+        <img src="${src}" alt="QR" style="width:220px;height:220px;image-rendering:pixelated;background:#fff;border-radius:8px;padding:8px">
+        <p class="muted" style="word-break:break-all;font-size:.8rem">${esc(url)}</p>
+      </div>
+      <mdui-button slot="action" variant="text" data-qr-copy>${esc(S.copyLink)}</mdui-button>
+      <mdui-button slot="action" variant="text" data-qr-close>${esc(S.close)}</mdui-button>`;
+    document.body.appendChild(dlg);
+    dlg.querySelector("[data-qr-copy]").addEventListener("click", () => copyText(url));
+    dlg.querySelector("[data-qr-close]").addEventListener("click", () => {
+      dlg.open = false; setTimeout(() => dlg.remove(), 300);
+    });
+    dlg.open = true;
+  }
+
   // ---- 預覽：對話框內嵌 iframe ----
   function preview(url, name) {
     const dlg = document.createElement("mdui-dialog");
@@ -1195,16 +1224,25 @@
           const data = await res.json().catch(() => ({}));
           copyText(data.url || "");
           window.toast(S.shareOk);
+          if (data.url) showQR(data.url, S.qrTitle);   // 分享連結同時顯示 QR
         } catch { window.toast(S.mkdirFail); }
         return;
       }
 
-      // 分享按鈕：按下才展開資料夾權限清單（擁有者）
+      // 分享按鈕：按下才展開分享／權限清單（擁有者）
       const pt = hit("[data-perm-toggle]");
       if (pt) {
         ev.preventDefault(); ev.stopPropagation();
-        const row = document.querySelector("[data-perm-row]");
-        if (row) row.hidden = !row.hidden;
+        const list = document.querySelector("[data-share-list]");
+        if (list) {
+          list.hidden = !list.hidden;
+          if (!list.hidden) {
+            // 第一次展開時才畫 QR（qrcode 前端產生，不需伺服器）
+            document.querySelectorAll("[data-qr]").forEach((img) => {
+              if (!img.getAttribute("src")) img.src = qrSrc(img.getAttribute("data-qr"));
+            });
+          }
+        }
         return;
       }
 
@@ -1220,7 +1258,10 @@
             row.querySelectorAll("[data-perm-set]").forEach((x) => {
               x.variant = x === ps ? "filled" : "text";
             });
-            setTimeout(() => { row.hidden = true; }, 800);   // 收合
+            setTimeout(() => {
+              const list = document.querySelector("[data-share-list]");
+              if (list) list.hidden = true;   // 收合整個分享清單
+            }, 800);
           }
           const note = document.querySelector("[data-perm-note]");
           if (note) note.textContent = (note.getAttribute("data-prefix") || "") + ps.textContent.trim();

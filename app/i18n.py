@@ -179,6 +179,8 @@ STRINGS: dict[str, dict[str, str]] = {
     "folder_public": {ZH: "公開資料夾 · {n} 個檔案", EN: "Public folder · {n} files"},
     "copy_share": {ZH: "複製分享連結", EN: "Copy share link"},
     "btn_share": {ZH: "分享", EN: "Share"},
+    "share_link": {ZH: "連結", EN: "Link"},
+    "qr_label": {ZH: "QR 碼", EN: "QR code"},
     "add_here_h": {ZH: "加入檔案到此資料夾", EN: "Add files to this folder"},
     "private_mode_note": {ZH: "目前為私人模式。如需上傳公開檔案，請先登出。", EN: "You are in private mode. Sign out to upload public files."},
     "signout_first": {ZH: "登出以上傳公開檔案", EN: "Sign out to upload"},

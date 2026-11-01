@@ -41,6 +41,34 @@ body, input, button, textarea, select {
 .hero p { opacity: .8; margin: 4px 0 12px; }
 .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
 .stack { display: grid; gap: 12px; }
+
+/* 分享清單：連結 / QR / 權限，按下分享才展開 */
+.share-list {
+  margin-top: 10px;
+  border: 1px solid rgba(127, 127, 127, .25);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.share-list[hidden] { display: none; }
+.share-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid rgba(127, 127, 127, .2);
+  flex-wrap: wrap;
+}
+.share-row:first-child { border-top: 0; }
+.share-row .muted { flex: 0 0 auto; min-width: 4.2em; }
+.share-url { flex: 1 1 220px; min-width: 0; word-break: break-all; font-size: .8rem; }
+.share-qr {
+  width: 180px;
+  height: 180px;
+  background: #fff;
+  border-radius: 8px;
+  padding: 6px;
+  image-rendering: pixelated;
+}
 .card-pad { padding: 16px 20px; }
 .card-pad h2 { margin: 4px 0 8px; font-size: 1.15rem; }
 .ep-card { padding: 14px 16px; margin-bottom: 10px; }
